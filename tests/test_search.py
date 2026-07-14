@@ -25,7 +25,9 @@ def test_segment_ngrams_short_fallback():
 
 
 def test_not_a_cult_finds_nautical(db_path):
-    results = find_rhymes("not a cult", limit=15, conn=_conn(db_path))
+    # A boundary-free whole-phrase echo, so it surfaces under full-span anchoring
+    # (tail anchoring instead favors words ending in the -ult rhyme).
+    results = find_rhymes("not a cult", limit=15, anchor=0.0, conn=_conn(db_path))
     words = [r.word for r in results]
     assert "nautical" in words, words
 

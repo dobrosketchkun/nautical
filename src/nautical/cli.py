@@ -193,6 +193,24 @@ def distance(
     console.print(result.alignment.pretty())
 
 
+def _parse_anchor(value: str | None, default: float) -> float:
+    """Parse an ``--anchor`` value: ``tail`` -> 1.0, ``full`` -> 0.0, or a float."""
+    if value is None:
+        return default
+    token = value.strip().lower()
+    if token == "tail":
+        return 1.0
+    if token == "full":
+        return 0.0
+    try:
+        parsed = float(token)
+    except ValueError:
+        raise typer.BadParameter(
+            f"--anchor must be 'tail', 'full', or a float 0..1 (got {value!r})."
+        )
+    return max(0.0, min(1.0, parsed))
+
+
 @app.command("rhymes")
 def rhymes(
     text: str = typer.Argument(..., help="Word or phrase to find sound-alikes for."),
@@ -200,6 +218,15 @@ def rhymes(
     pool: int = typer.Option(1500, "--pool", help="Candidate pool size (recall knob)."),
     strictness: float = typer.Option(
         0.5, "--strictness", min=0.0, max=1.0, help="0 = forgiving, 1 = strict."
+    ),
+    anchor: str = typer.Option(
+        None,
+        "--anchor",
+        help="'tail', 'full', or a float 0..1 (0 = full-span, 1 = rhyme tail). "
+        "Default: 0.5 single-word, 0.0 multi-word.",
+    ),
+    min_similarity: float = typer.Option(
+        0.0, "--min-similarity", min=0.0, max=1.0, help="Drop results below this sim."
     ),
     include_self: bool = typer.Option(
         False, "--include-self", help="Include the query word itself in results."
@@ -229,6 +256,8 @@ def rhymes(
             max_words=max_words,
             min_words=min_words,
             strictness=strictness,
+            anchor=_parse_anchor(anchor, default=0.0),
+            min_similarity=min_similarity,
             show_align=show_align,
             as_json=as_json,
         )
@@ -239,8 +268,11 @@ def rhymes(
         limit=limit,
         pool=pool,
         strictness=strictness,
+        anchor=_parse_anchor(anchor, default=0.5),
         include_self=include_self,
     )
+    if min_similarity > 0.0:
+        results = [r for r in results if r.similarity >= min_similarity]
 
     if as_json:
         typer.echo(
@@ -249,6 +281,8 @@ def rhymes(
                     {
                         "word": r.word,
                         "similarity": round(r.similarity, 4),
+                        "full_similarity": round(r.full_similarity, 4),
+                        "tail_similarity": round(r.tail_similarity, 4),
                         "stress_similarity": round(r.stress_similarity, 4),
                         "frequency": r.frequency,
                         "syllable_count": r.syllable_count,
@@ -270,6 +304,8 @@ def rhymes(
     table.add_column("#", justify="right", style="dim")
     table.add_column("Word", style="cyan")
     table.add_column("Sim", justify="right", style="magenta")
+    table.add_column("Full", justify="right")
+    table.add_column("Tail", justify="right")
     table.add_column("Stress", justify="right")
     table.add_column("Syll", justify="right")
     table.add_column("IPA")
@@ -278,6 +314,8 @@ def rhymes(
             str(i),
             r.word,
             f"{r.similarity:.3f}",
+            f"{r.full_similarity:.2f}",
+            f"{r.tail_similarity:.2f}",
             f"{r.stress_similarity:.2f}",
             str(r.syllable_count),
             r.ipa,
@@ -298,6 +336,8 @@ def _rhymes_multiword(
     max_words: int,
     min_words: int,
     strictness: float,
+    anchor: float,
+    min_similarity: float,
     show_align: bool,
     as_json: bool,
 ) -> None:
@@ -309,7 +349,10 @@ def _rhymes_multiword(
         max_words=max_words,
         min_words=min_words,
         strictness=strictness,
+        anchor=anchor,
     )
+    if min_similarity > 0.0:
+        results = [r for r in results if r.similarity >= min_similarity]
 
     if as_json:
         typer.echo(

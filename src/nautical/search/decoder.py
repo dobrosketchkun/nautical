@@ -20,10 +20,12 @@ from dataclasses import dataclass
 
 from ..config import DB_PATH
 from ..phonetics.align import Alignment, Seg, align
-from ..phonetics.distance import _stress_similarity, _stress_string
+from ..phonetics.anchor import rhyme_tail, segs_from_stored
+from ..phonetics.distance import _stress_similarity, _stress_string, score_segments
 from ..pronounce import enriched_segments, tokenize
 from .normalize import onset_keys
-from .words import _segs_from_row
+
+_segs_from_row = segs_from_stored
 
 # Ranking blend (uncalibrated first pass; see docs/NOTES.md).
 _W_NATURALNESS = 0.35
@@ -153,9 +155,16 @@ def find_multiword(
     max_words: int = 5,
     min_words: int = 2,
     strictness: float = 0.5,
+    anchor: float = 0.0,
     conn: sqlite3.Connection | None = None,
 ) -> list[MultiwordResult]:
-    """Return ranked multi-word sequences that sound like ``text``."""
+    """Return ranked multi-word sequences that sound like ``text``.
+
+    ``anchor`` (0 = full-span, 1 = tail-anchored) blends the whole-tiling
+    similarity with a rhyme-tail similarity so ``--anchor tail`` biases toward
+    tilings whose ending matches the target's rhyme. Multi-word echoes are
+    inherently full-span, so the default is ``0.0``.
+    """
     own_conn = conn is None
     if own_conn:
         conn = sqlite3.connect(DB_PATH)
@@ -210,6 +219,7 @@ def find_multiword(
         nodes[n].sort(key=lambda e: e[0])
 
         target_stress = _stress_string(target)
+        target_tail = rhyme_tail(target) if anchor > 0.0 else []
 
         best_by_phrase: dict[str, MultiwordResult] = {}
         for entry in nodes[n]:
@@ -221,11 +231,16 @@ def find_multiword(
                 continue
             phrase = " ".join(words)
 
+            segs = [s for tr in steps for s in tr.segs]
             similarity = max(0.0, 1.0 - entry[0] / n)
+            if anchor > 0.0:
+                tail_similarity, _, _ = score_segments(
+                    target_tail, rhyme_tail(segs), strictness=strictness
+                )
+                similarity = (1.0 - anchor) * similarity + anchor * tail_similarity
             naturalness = sum(_freq_score(tr.frequency) for tr in steps) / len(steps)
             num_words = len(words)
             score = similarity + _W_NATURALNESS * naturalness - _W_WORDS * num_words
-            segs = [s for tr in steps for s in tr.segs]
             stress_similarity = _stress_similarity(_stress_string(segs), target_stress)
 
             existing = best_by_phrase.get(phrase)

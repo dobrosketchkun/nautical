@@ -42,3 +42,13 @@ CREATE TABLE IF NOT EXISTS decode_onset (
 );
 
 CREATE INDEX IF NOT EXISTS idx_decode_onset ON decode_onset(onset_key);
+
+-- Rhyme-signature n-gram index for tail-anchored retrieval (Phase 5).
+-- Mirrors phoneme_ngram, but built only from each pronunciation's rhyme tail
+-- (last stressed vowel to end), so end-rhymes can be retrieved directly.
+CREATE TABLE IF NOT EXISTS rhyme_ngram (
+    ngram            TEXT NOT NULL,
+    pronunciation_id INTEGER NOT NULL REFERENCES pronunciation(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_rhyme_ngram ON rhyme_ngram(ngram);

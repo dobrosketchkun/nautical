@@ -28,30 +28,35 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   splits on whitespace, and strips edge punctuation. Deferred: Japanese-English
   switching, elongated spellings (e.g. "MASTURRR-"), performance notation,
   trickier contractions/clitics. See `src/nautical/pronounce.py`.
-- [ ] **(P3/P5) Retrieval recall depends on pool size.** Single-word search is
+- [x] **(P3/P5) Retrieval recall depends on pool size.** Single-word search is
   two-stage: a phoneme bi/tri-gram overlap index (`search/index.py`) narrows the
-  lexicon to `pool` (default 1500) candidates, then the Phase 2 aligner reranks.
-  If a known good answer is missing, raise `--pool` or add a unigram/rhyme-tail
-  fallback index. Deferred specialized indexes (rhyme-signature, stressed-vowel)
-  are Phase 5.
-- [ ] **(P5) Syllabifier is heuristic.** `phonology/syllable.py` uses a simplified
-  intervocalic-consonant rule (single consonant -> next onset; clusters -> last
-  consonant to next onset, rest to preceding coda). Refine for tail-anchoring
-  (from last stressed syllable) in Phase 5.
+  lexicon to `pool` (default 1500) candidates, then the aligner reranks. Phase 5
+  adds the rhyme-signature (tail) index (`rhyme_ngram` + `tail_candidate_ids`);
+  when `anchor > 0`, `find_rhymes` unions the full pool with a tail pool so
+  end-rhymes that share little else still surface. Raising `--pool` still helps
+  for edge cases. A stressed-vowel-only index remains a possible future add.
+- [x] **(P5) Syllabifier not needed for tail-anchoring.** The rhyme tail
+  (`phonetics/anchor.py:rhyme_tail`) is computed directly from per-segment stress
+  (last stressed vowel -> end), so it does not depend on the heuristic
+  `phonology/syllable.py`. The syllabifier's heuristic intervocalic rule remains
+  documented for other uses but is not on the anchoring path.
 - [ ] **(P2/later) Word-final vs sequence-final consonant leniency.** Cheap
   final-consonant deletion currently applies only at the end of the whole
   boundary-free sequence, not at each word boundary within a phrase.
 - [ ] **(P2/later) Multi-variant alignment.** Distance aligns only each token's
   primary (first CMUdict) variant; the full pronunciation lattice is ignored when
   scoring.
-- [ ] **(P5) Rhyme-tail ranking / onset-cluster gap penalty.** Phase 3 ranks by
-  whole-word alignment similarity, which under-ranks perfect end-rhymes that
-  differ only in onset length. Example: for `stainless` (`steɪnləs`), `brainless`
-  ranks ~19 (two onset subs, no gap) but `painless` (`peɪnləs`) ranks ~197
-  because the shorter onset forces a leading-consonant deletion (gap ~0.9) even
-  though the `-eɪnləs` rhyme tail is identical. Fix in Phase 5 with a
-  rhyme-signature (stressed-vowel-to-end) index / blended score, and/or cheaper
-  edge (onset) gaps. See `src/nautical/phonetics/align.py` (`_gap_cost`).
+- [x] **(P5) Rhyme-tail ranking / onset-cluster gap penalty. RESOLVED (P5).**
+  Phase 3 ranked by whole-word alignment similarity, which under-ranked perfect
+  end-rhymes that differ only in onset length: for `stainless` (`steɪnləs`),
+  `painless` (`peɪnləs`) sank to ~197 because the shorter onset forced a
+  leading-consonant deletion (gap ~0.9) even though the `-eɪnləs` tail is
+  identical. Phase 5 adds tail-anchored scoring (`phonetics/anchor.py`): every
+  candidate gets a `tail_similarity` (rhyme tail vs rhyme tail, onset-agnostic)
+  blended with `full_similarity` by the `anchor` dial. With `--anchor tail`
+  (or the default `anchor=0.5`), `painless`/`brainless` rank in the top few.
+  The underlying edge-gap penalty in `align.py` is left as-is (harmless once the
+  tail path exists).
 - [ ] **(P4/P6) Multi-word decoder surfaces sound, not meaning.** The decoder
   (`search/decoder.py`) tiles the target with real words via an onset index
   (`decode_onset`) + beam DP, reranked by `similarity + naturalness`. It works and
@@ -88,6 +93,16 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 - [ ] **(P4) Decoder ranking blend uncalibrated.** `_W_NATURALNESS=0.35`,
   `_W_WORDS=0.05` in `search/decoder.py` are first-pass constants; calibrate in
   Phase 7 against `some_lyrics.txt`.
+
+## Decisions
+
+- **(P5) Anchor dial defaults.** Single-word `find_rhymes` defaults to
+  `anchor=0.5` (blend full-span + rhyme tail): it lifts end-rhymes like
+  `painless`/`brainless` to the top while retaining the whole-word signal, and
+  existing Phase 3 tests still hold (the blend only raises tail rhymes). The
+  multi-word decoder defaults to `anchor=0.0` (full-span) since oronyms are
+  inherently whole-span echoes; `--anchor tail` biases toward matching endings.
+  `--anchor` accepts `tail` (1.0), `full` (0.0), or a float `0..1`.
 
 ## Approximations made (intentional, documented)
 

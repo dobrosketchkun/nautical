@@ -15,6 +15,7 @@ from pathlib import Path
 
 from ..config import DB_PATH, SCHEMA_VERSION, ensure_data_dir
 from ..data.sources import get_frequency, iter_lexemes
+from ..phonetics.anchor import rhyme_tail, segs_from_stored
 from ..phonology.arpabet import arpabet_to_ipa, stress_pattern, syllable_count
 from ..search.index import segment_ngrams
 from ..search.normalize import onset_keys
@@ -33,6 +34,7 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
     ).fetchone()[0]
     ngram_count = conn.execute("SELECT COUNT(*) FROM phoneme_ngram").fetchone()[0]
     onset_count = conn.execute("SELECT COUNT(*) FROM decode_onset").fetchone()[0]
+    rhyme_count = conn.execute("SELECT COUNT(*) FROM rhyme_ngram").fetchone()[0]
 
     meta = {
         "schema_version": SCHEMA_VERSION,
@@ -42,6 +44,7 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
         "lexeme_with_frequency": str(with_freq),
         "phoneme_ngram_count": str(ngram_count),
         "decode_onset_count": str(onset_count),
+        "rhyme_ngram_count": str(rhyme_count),
     }
     conn.executemany(
         "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", meta.items()
@@ -52,6 +55,7 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
         "lexeme_with_frequency": with_freq,
         "phoneme_ngram_count": ngram_count,
         "decode_onset_count": onset_count,
+        "rhyme_ngram_count": rhyme_count,
     }
 
 
@@ -68,6 +72,27 @@ def _build_ngram_index(conn: sqlite3.Connection) -> None:
     conn.executemany(
         "INSERT INTO phoneme_ngram(ngram, pronunciation_id) VALUES (?, ?)",
         ngram_rows,
+    )
+
+
+def _build_rhyme_index(conn: sqlite3.Connection) -> None:
+    """Populate rhyme_ngram from each pronunciation's rhyme tail.
+
+    The tail (last stressed vowel to end) is derived with the same helpers used
+    at query time, so retrieval and scoring agree on where the rhyme begins.
+    """
+    rows = conn.execute(
+        "SELECT id, arpabet, ipa_segments FROM pronunciation"
+    ).fetchall()
+    rhyme_rows = []
+    for pron_id, arpabet, ipa_segments in rows:
+        segs = segs_from_stored(arpabet, ipa_segments)
+        tail = [s.ipa for s in rhyme_tail(segs)]
+        for gram in segment_ngrams(tail):
+            rhyme_rows.append((gram, pron_id))
+    conn.executemany(
+        "INSERT INTO rhyme_ngram(ngram, pronunciation_id) VALUES (?, ?)",
+        rhyme_rows,
     )
 
 
@@ -150,6 +175,7 @@ def build_db(force: bool = False, db_path: Path | None = None) -> dict[str, int]
         conn.commit()
 
         _build_ngram_index(conn)
+        _build_rhyme_index(conn)
         _build_decode_index(conn)
 
         stats = _write_meta(conn)

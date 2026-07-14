@@ -29,18 +29,31 @@ def segment_ngrams(segments: list[str], min_n: int = 2, max_n: int = 3) -> list[
     return grams
 
 
-def candidate_ids(
-    conn: sqlite3.Connection, target_segments: list[str], pool: int
+def _overlap_ids(
+    conn: sqlite3.Connection, table: str, target_segments: list[str], pool: int
 ) -> list[int]:
-    """Return up to ``pool`` pronunciation ids ranked by n-gram overlap."""
     grams = segment_ngrams(target_segments)
     if not grams:
         return []
     placeholders = ",".join("?" * len(grams))
     rows = conn.execute(
         f"SELECT pronunciation_id, COUNT(*) AS overlap "
-        f"FROM phoneme_ngram WHERE ngram IN ({placeholders}) "
+        f"FROM {table} WHERE ngram IN ({placeholders}) "
         f"GROUP BY pronunciation_id ORDER BY overlap DESC LIMIT ?",
         (*grams, pool),
     ).fetchall()
     return [row[0] for row in rows]
+
+
+def candidate_ids(
+    conn: sqlite3.Connection, target_segments: list[str], pool: int
+) -> list[int]:
+    """Return up to ``pool`` pronunciation ids ranked by full n-gram overlap."""
+    return _overlap_ids(conn, "phoneme_ngram", target_segments, pool)
+
+
+def tail_candidate_ids(
+    conn: sqlite3.Connection, target_tail_segments: list[str], pool: int
+) -> list[int]:
+    """Return up to ``pool`` pronunciation ids ranked by rhyme-tail overlap."""
+    return _overlap_ids(conn, "rhyme_ngram", target_tail_segments, pool)
