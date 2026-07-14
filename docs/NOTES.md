@@ -28,6 +28,12 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   splits on whitespace, and strips edge punctuation. Deferred: Japanese-English
   switching, elongated spellings (e.g. "MASTURRR-"), performance notation,
   trickier contractions/clitics. See `src/nautical/pronounce.py`.
+- [ ] **(P3/P5) Retrieval recall depends on pool size.** Single-word search is
+  two-stage: a phoneme bi/tri-gram overlap index (`search/index.py`) narrows the
+  lexicon to `pool` (default 1500) candidates, then the Phase 2 aligner reranks.
+  If a known good answer is missing, raise `--pool` or add a unigram/rhyme-tail
+  fallback index. Deferred specialized indexes (rhyme-signature, stressed-vowel)
+  are Phase 5.
 - [ ] **(P5) Syllabifier is heuristic.** `phonology/syllable.py` uses a simplified
   intervocalic-consonant rule (single consonant -> next onset; clusters -> last
   consonant to next onset, rest to preceding coda). Refine for tail-anchoring
@@ -38,6 +44,14 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 - [ ] **(P2/later) Multi-variant alignment.** Distance aligns only each token's
   primary (first CMUdict) variant; the full pronunciation lattice is ignored when
   scoring.
+- [ ] **(P5) Rhyme-tail ranking / onset-cluster gap penalty.** Phase 3 ranks by
+  whole-word alignment similarity, which under-ranks perfect end-rhymes that
+  differ only in onset length. Example: for `stainless` (`steɪnləs`), `brainless`
+  ranks ~19 (two onset subs, no gap) but `painless` (`peɪnləs`) ranks ~197
+  because the shorter onset forces a leading-consonant deletion (gap ~0.9) even
+  though the `-eɪnləs` rhyme tail is identical. Fix in Phase 5 with a
+  rhyme-signature (stressed-vowel-to-end) index / blended score, and/or cheaper
+  edge (onset) gaps. See `src/nautical/phonetics/align.py` (`_gap_cost`).
 
 ## Approximations made (intentional, documented)
 

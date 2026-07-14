@@ -40,6 +40,23 @@ def _stress_similarity(a: str, b: str) -> float:
     return 1.0 - editdistance.eval(a, b) / longest
 
 
+def score_segments(
+    segs_a: list[Seg], segs_b: list[Seg], strictness: float = 0.5
+) -> tuple[float, float, Alignment]:
+    """Align two segment sequences and return (similarity, stress_similarity, alignment).
+
+    Shared by ``phonetic_distance`` and the search reranker so the similarity
+    formula lives in one place.
+    """
+    alignment = align(segs_a, segs_b, strictness=strictness)
+    columns = len(alignment.pairs) or 1
+    similarity = max(0.0, 1.0 - alignment.total_cost / columns)
+    stress_similarity = _stress_similarity(
+        _stress_string(segs_a), _stress_string(segs_b)
+    )
+    return similarity, stress_similarity, alignment
+
+
 def phonetic_distance(
     text_a: str,
     text_b: str,
@@ -57,9 +74,9 @@ def phonetic_distance(
         if own_conn:
             conn.close()
 
-    alignment = align(segs_a, segs_b, strictness=strictness)
-    columns = len(alignment.pairs) or 1
-    similarity = max(0.0, 1.0 - alignment.total_cost / columns)
+    similarity, stress_similarity, alignment = score_segments(
+        segs_a, segs_b, strictness=strictness
+    )
 
     return DistanceResult(
         text_a=text_a,
@@ -67,9 +84,7 @@ def phonetic_distance(
         ipa_a="".join(s.ipa for s in segs_a),
         ipa_b="".join(s.ipa for s in segs_b),
         similarity=similarity,
-        stress_similarity=_stress_similarity(
-            _stress_string(segs_a), _stress_string(segs_b)
-        ),
+        stress_similarity=stress_similarity,
         total_cost=alignment.total_cost,
         alignment=alignment,
     )

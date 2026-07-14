@@ -24,3 +24,11 @@ CREATE TABLE IF NOT EXISTS pronunciation (
 );
 
 CREATE INDEX IF NOT EXISTS idx_pron_lexeme ON pronunciation(lexeme_id);
+
+-- Phoneme n-gram inverted index for generous candidate retrieval (Phase 3).
+CREATE TABLE IF NOT EXISTS phoneme_ngram (
+    ngram            TEXT NOT NULL,
+    pronunciation_id INTEGER NOT NULL REFERENCES pronunciation(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_phoneme_ngram ON phoneme_ngram(ngram);

@@ -12,6 +12,7 @@ from rich.table import Table
 from . import pronounce as pronounce_service
 from .db import loader
 from .phonetics import distance as distance_service
+from .search import words as word_search
 
 # Force UTF-8 on stdout/stderr so IPA and box-drawing characters survive on
 # Windows consoles (default cp1252 cannot encode them).
@@ -189,6 +190,79 @@ def distance(
     table.add_row("Total cost", f"{result.total_cost:.3f}")
     console.print(table)
     console.print(result.alignment.pretty())
+
+
+@app.command("rhymes")
+def rhymes(
+    text: str = typer.Argument(..., help="Word or phrase to find sound-alikes for."),
+    limit: int = typer.Option(25, "--limit", help="Max results to return."),
+    pool: int = typer.Option(1500, "--pool", help="Candidate pool size (recall knob)."),
+    strictness: float = typer.Option(
+        0.5, "--strictness", min=0.0, max=1.0, help="0 = forgiving, 1 = strict."
+    ),
+    include_self: bool = typer.Option(
+        False, "--include-self", help="Include the query word itself in results."
+    ),
+    show_align: bool = typer.Option(
+        False, "--align", help="Print the phoneme alignment for each result."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+) -> None:
+    """Find single-word sound-alikes for a word or phrase."""
+    results = word_search.find_rhymes(
+        text,
+        limit=limit,
+        pool=pool,
+        strictness=strictness,
+        include_self=include_self,
+    )
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "word": r.word,
+                        "similarity": round(r.similarity, 4),
+                        "stress_similarity": round(r.stress_similarity, 4),
+                        "frequency": r.frequency,
+                        "syllable_count": r.syllable_count,
+                        "ipa": r.ipa,
+                    }
+                    for r in results
+                ],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if not results:
+        console.print(f"[yellow]No matches found for[/yellow] {text!r}.")
+        return
+
+    table = Table(title=f"Rhymes for: {text}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Word", style="cyan")
+    table.add_column("Sim", justify="right", style="magenta")
+    table.add_column("Stress", justify="right")
+    table.add_column("Syll", justify="right")
+    table.add_column("IPA")
+    for i, r in enumerate(results, start=1):
+        table.add_row(
+            str(i),
+            r.word,
+            f"{r.similarity:.3f}",
+            f"{r.stress_similarity:.2f}",
+            str(r.syllable_count),
+            r.ipa,
+        )
+    console.print(table)
+
+    if show_align:
+        for r in results:
+            console.print(f"\n[cyan]{r.word}[/cyan] ({r.similarity:.3f})")
+            console.print(r.alignment.pretty())
 
 
 if __name__ == "__main__":
