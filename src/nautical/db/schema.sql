@@ -32,3 +32,13 @@ CREATE TABLE IF NOT EXISTS phoneme_ngram (
 );
 
 CREATE INDEX IF NOT EXISTS idx_phoneme_ngram ON phoneme_ngram(ngram);
+
+-- Normalized-onset index for the multi-word phonetic decoder (Phase 4).
+-- Anchors decode candidates by their leading (consonant-exact, vowel-broad)
+-- segments so a target position can fetch words that could start there.
+CREATE TABLE IF NOT EXISTS decode_onset (
+    onset_key        TEXT NOT NULL,
+    pronunciation_id INTEGER NOT NULL REFERENCES pronunciation(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_decode_onset ON decode_onset(onset_key);

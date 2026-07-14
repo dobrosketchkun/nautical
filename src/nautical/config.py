@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = DATA_DIR / "nautical.db"
 
-SCHEMA_VERSION = "3"
+SCHEMA_VERSION = "4"
 
 
 def ensure_data_dir() -> Path:

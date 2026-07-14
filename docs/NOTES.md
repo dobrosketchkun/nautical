@@ -52,6 +52,42 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   though the `-eɪnləs` rhyme tail is identical. Fix in Phase 5 with a
   rhyme-signature (stressed-vowel-to-end) index / blended score, and/or cheaper
   edge (onset) gaps. See `src/nautical/phonetics/align.py` (`_gap_cost`).
+- [ ] **(P4/P6) Multi-word decoder surfaces sound, not meaning.** The decoder
+  (`search/decoder.py`) tiles the target with real words via an onset index
+  (`decode_onset`) + beam DP, reranked by `similarity + naturalness`. It works and
+  produces genuine sound-alikes (`nautical` -> `no to call`, `naughty can`,
+  `naught a can`, `gnaw to can`; `stainless` -> `state less`, `stayed less`,
+  `stain less`, `spain less`). Two honest limitations, both by design for later
+  phases:
+  1. **Meaningful phrases are not distinguishable from bland ones without
+     semantics.** For `nautical`, the genuine close oronym `gnaw tickle`
+     (`nɔtɪkəl`, similarity 0.981) is discoverable and is ~rank 198 by *pure
+     similarity* out of ~185k tilings, but is buried by score because `gnaw`/
+     `tickle` are low-frequency; meanwhile bland common-word tilings (`no to
+     can`) dominate the frequency-naturalness ranking. Distinguishing "a real
+     phrase" from "three common words in a row" needs phrase-plausibility /
+     semantics -> **Phase 6** (theme reranking) is what makes this output useful.
+  2. **`not a cult` is a *loose* oronym, not a close one.** It adds a whole extra
+     `/t/` (`nɑtəkʌlt`, 8 segments vs `nautical`'s 7), so its similarity is only
+     ~0.90 and it sits far down the cost-ranked pool (beyond the default
+     `final_cap`), even though `not a can`/`not a cull` (no extra `/t/`) surface
+     easily. It is reachable only with a large `cand_per_pos` (>=~600, so `cult`
+     survives the pos-4 candidate cut) and a large pool. This is inherent to raw
+     phonetic tiling; the artistic `not a cult <-> nautical` pairing relies on
+     rhythm/semantics that arrive in Phases 5-6. The PHASES.md success check
+     ("`not a cult` near the top") is therefore not met by Phase 4 alone.
+- [ ] **(P4) Candidate flooding by rare-word spellings.** Top-by-similarity is
+  crowded with near-identical spellings of the same sound (`naught a call`,
+  `gnaw to call`, `naught a cull`, `gnaw to cull`, ...). Naturalness partly
+  suppresses these; an IPA-level dedupe (keep the most natural spelling per
+  sound) would declutter and is a cheap future improvement.
+- [ ] **(P7) Decoder latency.** Each query aligns every onset-matching word at
+  every target position (thousands of tiny alignments), so a query is ~4s
+  (`nautical`) to ~7s (`stainless`) at defaults (`beam=300`, `cand_per_pos=350`).
+  Fine for a CLI but a caching / candidate-prefilter target for Phase 7.
+- [ ] **(P4) Decoder ranking blend uncalibrated.** `_W_NATURALNESS=0.35`,
+  `_W_WORDS=0.05` in `search/decoder.py` are first-pass constants; calibrate in
+  Phase 7 against `some_lyrics.txt`.
 
 ## Approximations made (intentional, documented)
 

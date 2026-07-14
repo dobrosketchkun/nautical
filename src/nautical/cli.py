@@ -12,6 +12,7 @@ from rich.table import Table
 from . import pronounce as pronounce_service
 from .db import loader
 from .phonetics import distance as distance_service
+from .search import decoder as multiword_search
 from .search import words as word_search
 
 # Force UTF-8 on stdout/stderr so IPA and box-drawing characters survive on
@@ -203,12 +204,36 @@ def rhymes(
     include_self: bool = typer.Option(
         False, "--include-self", help="Include the query word itself in results."
     ),
+    multiword: bool = typer.Option(
+        False, "--multiword", help="Decode multi-word sound-alikes (e.g. 'not a cult')."
+    ),
+    beam: int = typer.Option(60, "--beam", help="Beam width for the multi-word decoder."),
+    max_words: int = typer.Option(
+        5, "--max-words", help="Max words per multi-word result."
+    ),
+    min_words: int = typer.Option(
+        2, "--min-words", help="Min words per multi-word result."
+    ),
     show_align: bool = typer.Option(
         False, "--align", help="Print the phoneme alignment for each result."
     ),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
-    """Find single-word sound-alikes for a word or phrase."""
+    """Find single-word (or, with --multiword, multi-word) sound-alikes."""
+    if multiword:
+        _rhymes_multiword(
+            text,
+            limit=limit,
+            pool=pool,
+            beam=beam,
+            max_words=max_words,
+            min_words=min_words,
+            strictness=strictness,
+            show_align=show_align,
+            as_json=as_json,
+        )
+        return
+
     results = word_search.find_rhymes(
         text,
         limit=limit,
@@ -263,6 +288,81 @@ def rhymes(
         for r in results:
             console.print(f"\n[cyan]{r.word}[/cyan] ({r.similarity:.3f})")
             console.print(r.alignment.pretty())
+
+
+def _rhymes_multiword(
+    text: str,
+    limit: int,
+    pool: int,
+    beam: int,
+    max_words: int,
+    min_words: int,
+    strictness: float,
+    show_align: bool,
+    as_json: bool,
+) -> None:
+    results = multiword_search.find_multiword(
+        text,
+        limit=limit,
+        beam_width=beam,
+        cand_per_pos=pool,
+        max_words=max_words,
+        min_words=min_words,
+        strictness=strictness,
+    )
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                [
+                    {
+                        "phrase": r.phrase,
+                        "words": r.words,
+                        "score": round(r.score, 4),
+                        "similarity": round(r.similarity, 4),
+                        "stress_similarity": round(r.stress_similarity, 4),
+                        "naturalness": round(r.naturalness, 4),
+                        "num_words": r.num_words,
+                        "ipa": r.ipa,
+                    }
+                    for r in results
+                ],
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if not results:
+        console.print(f"[yellow]No multi-word matches found for[/yellow] {text!r}.")
+        return
+
+    table = Table(title=f"Multi-word sound-alikes for: {text}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Phrase", style="cyan")
+    table.add_column("Score", justify="right", style="magenta")
+    table.add_column("Sim", justify="right")
+    table.add_column("Nat", justify="right")
+    table.add_column("Words", justify="right")
+    table.add_column("IPA")
+    for i, r in enumerate(results, start=1):
+        table.add_row(
+            str(i),
+            r.phrase,
+            f"{r.score:.3f}",
+            f"{r.similarity:.3f}",
+            f"{r.naturalness:.2f}",
+            str(r.num_words),
+            r.ipa,
+        )
+    console.print(table)
+
+    if show_align:
+        for r in results:
+            console.print(f"\n[cyan]{r.phrase}[/cyan] ({r.score:.3f})")
+            for word, alignment in r.chunks:
+                console.print(f"  [dim]{word}[/dim]")
+                console.print(alignment.pretty())
 
 
 if __name__ == "__main__":
