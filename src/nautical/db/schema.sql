@@ -18,6 +18,8 @@ CREATE TABLE IF NOT EXISTS pronunciation (
     arpabet        TEXT NOT NULL,        -- space-joined ARPAbet phones w/ stress digits
     stress         TEXT,                 -- concatenated stress digits, e.g. "010"
     syllable_count INTEGER,
+    ipa            TEXT,                 -- normalized IPA string, e.g. "nɔtɪkəl"
+    ipa_segments   TEXT,                 -- space-joined IPA segments, e.g. "n ɔ t ɪ k ə l"
     source         TEXT
 );
 

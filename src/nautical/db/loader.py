@@ -1,9 +1,9 @@
 """Build the SQLite lexicon from the offline data sources.
 
 Reads CMUdict pronunciations and wordfreq frequencies and writes them into
-`lexeme` and `pronunciation` tables. ARPAbet -> IPA normalization is
-deliberately left to Phase 1; here we store the raw ARPAbet plus a stress
-pattern and syllable count derived from the vowel phones.
+`lexeme` and `pronunciation` tables, normalizing each ARPAbet pronunciation to
+IPA (plus a stress pattern and syllable count) at build time so later phases can
+index the phonetic representation directly.
 """
 
 from __future__ import annotations
@@ -15,20 +15,12 @@ from pathlib import Path
 
 from ..config import DB_PATH, SCHEMA_VERSION, ensure_data_dir
 from ..data.sources import get_frequency, iter_lexemes
+from ..phonology.arpabet import arpabet_to_ipa, stress_pattern, syllable_count
 
 
 def _load_schema(conn: sqlite3.Connection) -> None:
     schema_sql = (files("nautical.db") / "schema.sql").read_text(encoding="utf-8")
     conn.executescript(schema_sql)
-
-
-def _stress_and_syllables(phones: list[str]) -> tuple[str, int]:
-    """Extract the stress pattern and syllable count from ARPAbet phones.
-
-    Vowel phones end in a stress digit (0/1/2); consonants do not.
-    """
-    digits = [p[-1] for p in phones if p[-1].isdigit()]
-    return "".join(digits), len(digits)
 
 
 def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
@@ -91,15 +83,23 @@ def build_db(force: bool = False, db_path: Path | None = None) -> dict[str, int]
         for word, pronunciations in lexemes:
             lexeme_id = id_map[word]
             for phones in pronunciations:
-                stress, syllables = _stress_and_syllables(phones)
+                ipa_segments = arpabet_to_ipa(phones)
                 pron_rows.append(
-                    (lexeme_id, " ".join(phones), stress, syllables, "cmudict")
+                    (
+                        lexeme_id,
+                        " ".join(phones),
+                        stress_pattern(phones),
+                        syllable_count(phones),
+                        "".join(ipa_segments),
+                        " ".join(ipa_segments),
+                        "cmudict",
+                    )
                 )
 
         conn.executemany(
             "INSERT INTO pronunciation"
-            "(lexeme_id, arpabet, stress, syllable_count, source) "
-            "VALUES (?, ?, ?, ?, ?)",
+            "(lexeme_id, arpabet, stress, syllable_count, ipa, ipa_segments, source) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             pron_rows,
         )
 

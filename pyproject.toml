@@ -13,6 +13,7 @@ dependencies = [
     "wordfreq>=3.0.0",
     "typer>=0.9.0",
     "rich>=13.0.0",
+    "g2p_en>=2.1.0",
 ]
 
 [project.optional-dependencies]

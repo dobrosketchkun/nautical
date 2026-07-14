@@ -12,18 +12,7 @@ from typing import Iterator
 import cmudict
 from wordfreq import word_frequency
 
-# ARPAbet vowel nuclei. In CMUdict these always carry a trailing stress digit
-# (0, 1, or 2); consonants never do. That property is used to count syllables
-# and extract the stress pattern.
-ARPABET_VOWELS = frozenset(
-    {
-        "AA", "AE", "AH", "AO", "AW", "AY",
-        "EH", "ER", "EY",
-        "IH", "IY",
-        "OW", "OY",
-        "UH", "UW",
-    }
-)
+# ARPAbet vowel/phone helpers live in nautical.phonology.arpabet.
 
 
 def iter_lexemes() -> Iterator[tuple[str, list[list[str]]]]:
