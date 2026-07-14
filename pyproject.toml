@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nautical"
+version = "0.0.1"
+description = "Phonetic Creativity Workbench - offline rhyme discovery engine"
+readme = "docs/STEP_ONE.md"
+requires-python = ">=3.10"
+dependencies = [
+    "cmudict>=1.0.13",
+    "wordfreq>=3.0.0",
+    "typer>=0.9.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[project.scripts]
+nautical = "nautical.cli:app"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"nautical.db" = ["*.sql"]

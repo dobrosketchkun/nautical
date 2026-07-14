@@ -1,0 +1,38 @@
+# Byte-compiled / optimized / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Packaging / build artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Generated data + databases (rebuildable via `nautical db build`)
+/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Staged vectors / large model downloads
+*.zip
+glove*/
+*.vec
+*.bin
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+*.swp

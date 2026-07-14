@@ -1,0 +1,29 @@
+---
+description: Always use the conda general_env_1 environment for Python, pip, and tests
+alwaysApply: true
+---
+
+# Python environment
+
+This project runs exclusively inside the conda environment `general_env_1`
+(Python 3.10.6). Never use the system Python, and never `pip install` globally.
+
+Run every Python, pip, test, or console-script command through that env.
+Use `--no-capture-output` for anything that prints Unicode (IPA, Rich tables);
+otherwise conda re-encodes output as cp1252 on Windows and crashes/hangs.
+
+```bash
+conda run --no-capture-output -n general_env_1 nautical stats
+conda run --no-capture-output -n general_env_1 pytest
+conda run -n general_env_1 pip install -e .
+conda run -n general_env_1 python ...
+```
+
+Or activate it first for an interactive shell:
+
+```bash
+conda activate general_env_1
+```
+
+Do not introduce `.venv`/`virtualenv` setups or invoke a bare `python` / `pip`
+that could resolve to system Python.
