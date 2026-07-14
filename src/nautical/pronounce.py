@@ -15,7 +15,8 @@ from pathlib import Path
 
 from . import g2p as g2p_module
 from .config import DB_PATH
-from .phonology.arpabet import arpabet_to_ipa, stress_pattern, syllable_count
+from .phonetics.align import Seg
+from .phonology.arpabet import arpabet_to_ipa, is_vowel, stress_pattern, syllable_count
 from .phonology.syllable import Syllable, syllabify
 
 # Strip leading/trailing punctuation but preserve word-internal apostrophes
@@ -147,3 +148,25 @@ def pronounce_phrase(text: str, conn: sqlite3.Connection | None = None) -> Phras
         boundaries=boundaries,
         boundary_free="".join(segments),
     )
+
+
+def enriched_segments(
+    text: str, conn: sqlite3.Connection | None = None
+) -> list[Seg]:
+    """Return per-segment ``Seg(ipa, stress, is_vowel)`` for a phrase.
+
+    Uses each token's primary variant, deriving per-segment stress and vowel-ness
+    from the ARPAbet<->IPA 1:1 correspondence. Consumed by the phonetic aligner.
+    """
+    phrase = pronounce_phrase(text, conn=conn)
+    segments: list[Seg] = []
+    for word_pron in phrase.tokens:
+        primary = word_pron.primary
+        if primary is None:
+            continue
+        for phone, ipa_segment in zip(primary.arpabet, primary.ipa_segments):
+            stress = phone[-1] if phone[-1].isdigit() else ""
+            segments.append(
+                Seg(ipa=ipa_segment, stress=stress, is_vowel=is_vowel(phone))
+            )
+    return segments

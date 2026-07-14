@@ -5,14 +5,6 @@ import sqlite3
 import pytest
 
 from nautical import pronounce
-from nautical.db import loader
-
-
-@pytest.fixture(scope="module")
-def db_path(tmp_path_factory):
-    path = tmp_path_factory.mktemp("db") / "nautical.db"
-    loader.build_db(force=True, db_path=path)
-    return path
 
 
 def _conn(db_path):

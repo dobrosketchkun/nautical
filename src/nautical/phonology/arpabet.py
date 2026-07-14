@@ -39,6 +39,10 @@ _ARPABET_TO_IPA = {
     "OW": "oʊ", "OY": "ɔɪ", "UH": "ʊ", "UW": "u",
 }
 
+# Every IPA segment that arpabet_to_ipa can emit, including the stress-aware
+# reduced forms (schwa "ə" and r-colored "ɚ").
+IPA_INVENTORY = frozenset(_ARPABET_TO_IPA.values()) | {"ə", "ɚ"}
+
 
 def strip_stress(phone: str) -> str:
     """Return the ARPAbet phone without its trailing stress digit."""

@@ -11,6 +11,7 @@ from rich.table import Table
 
 from . import pronounce as pronounce_service
 from .db import loader
+from .phonetics import distance as distance_service
 
 # Force UTF-8 on stdout/stderr so IPA and box-drawing characters survive on
 # Windows consoles (default cp1252 cannot encode them).
@@ -137,6 +138,57 @@ def pronounce(
     console.print(
         f"[bold]boundary-free:[/bold] [magenta]{phrase.boundary_free}[/magenta]"
     )
+
+
+@app.command("distance")
+def distance(
+    text_a: str = typer.Argument(..., help="First word or phrase."),
+    text_b: str = typer.Argument(..., help="Second word or phrase."),
+    strictness: float = typer.Option(
+        0.5, "--strictness", min=0.0, max=1.0, help="0 = forgiving, 1 = strict."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+) -> None:
+    """Phonetic distance between two texts, with the aligning explanation."""
+    result = distance_service.phonetic_distance(text_a, text_b, strictness=strictness)
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "text_a": result.text_a,
+                    "text_b": result.text_b,
+                    "ipa_a": result.ipa_a,
+                    "ipa_b": result.ipa_b,
+                    "similarity": round(result.similarity, 4),
+                    "stress_similarity": round(result.stress_similarity, 4),
+                    "total_cost": round(result.total_cost, 4),
+                    "alignment": [
+                        {
+                            "src": pair.src.ipa if pair.src else None,
+                            "tgt": pair.tgt.ipa if pair.tgt else None,
+                            "op": pair.op,
+                            "cost": round(pair.cost, 4),
+                        }
+                        for pair in result.alignment.pairs
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    table = Table(title=f"Distance: {text_a}  vs  {text_b}")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="white")
+    table.add_row("IPA A", f"[magenta]{result.ipa_a}[/magenta]")
+    table.add_row("IPA B", f"[magenta]{result.ipa_b}[/magenta]")
+    table.add_row("Similarity", f"{result.similarity:.3f}")
+    table.add_row("Stress similarity", f"{result.stress_similarity:.3f}")
+    table.add_row("Total cost", f"{result.total_cost:.3f}")
+    console.print(table)
+    console.print(result.alignment.pretty())
 
 
 if __name__ == "__main__":
