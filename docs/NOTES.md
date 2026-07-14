@@ -71,7 +71,8 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
      `tickle` are low-frequency; meanwhile bland common-word tilings (`no to
      can`) dominate the frequency-naturalness ranking. Distinguishing "a real
      phrase" from "three common words in a row" needs phrase-plausibility /
-     semantics -> **Phase 6** (theme reranking) is what makes this output useful.
+     semantics -> **Phase 6** (theme reranking, now implemented via `--theme`)
+     is what makes this output useful when a verse/theme is supplied.
   2. **`not a cult` is a *loose* oronym, not a close one.** It adds a whole extra
      `/t/` (`nɑtəkʌlt`, 8 segments vs `nautical`'s 7), so its similarity is only
      ~0.90 and it sits far down the cost-ranked pool (beyond the default
@@ -96,6 +97,20 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 
 ## Decisions
 
+- **(P6) GloVe 6B 300d, auto-downloaded on first use.** The semantic layer uses
+  GloVe 6B (300d). `semantics/vectors.py:ensure_vectors()` lazily downloads
+  `glove.6B.zip` (~822 MB, one-time) if no cache/raw file is present, filters it
+  to the lexicon, L2-normalizes, and caches a `float32` `.npy` (~130 MB) plus a
+  `vocab.txt` under the gitignored `data/vectors/`. Offline after that. A
+  pre-staged raw file or cache skips the download. Primary mirror is Stanford,
+  fallback is HuggingFace (`config.GLOVE_ZIP_URLS`).
+- **(P6) Theme fit is a separate signal.** `--theme` reranks by a bounded blend
+  `(1-w)*similarity + w*(theme_fit+1)/2` (default `--theme-weight 0.5`) but shows
+  `theme_fit` (cosine, `[-1,1]`) as its own column/JSON field - the phonetic and
+  semantic scores are never merged into one opaque number. When `--theme` is set,
+  a wider phonetic window is fetched before reranking so off-top but on-theme
+  matches can surface.
+
 - **(P5) Anchor dial defaults.** Single-word `find_rhymes` defaults to
   `anchor=0.5` (blend full-span + rhyme tail): it lifts end-rhymes like
   `painless`/`brainless` to the top while retaining the whole-word signal, and
@@ -103,6 +118,19 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   multi-word decoder defaults to `anchor=0.0` (full-span) since oronyms are
   inherently whole-span echoes; `--anchor tail` biases toward matching endings.
   `--anchor` accepts `tail` (1.0), `full` (0.0), or a float `0..1`.
+
+## Phase 6 limitations / deferrals
+
+- [ ] **(P7) Theme-blend weight is uncalibrated.** `--theme-weight` default 0.5
+  and the bounded blend in `semantics/theme.py:apply_theme` are first-pass; tune
+  against `some_lyrics.txt` verses in Phase 7.
+- [ ] **(P6/later) Theme/seed words limited to the lexicon-filtered vocab.**
+  Vectors are filtered to the ~100-110K lexicon words, so a verse/seed term that
+  is not a CMUdict entry is skipped (with a warning) rather than resolved against
+  full GloVe. Fix option: keep a small full-vocab side table for theme words only.
+- [ ] **(P6/later) Multi-word theme fit is a bag-of-words mean.** A phrase's
+  `theme_fit` is the mean of its member-word vectors (OOV skipped); it ignores
+  order and composition. Fine for reranking; revisit if phrase semantics matter.
 
 ## Approximations made (intentional, documented)
 

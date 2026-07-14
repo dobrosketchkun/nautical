@@ -26,6 +26,7 @@ class RhymeResult:
     syllable_count: int
     ipa: str
     alignment: Alignment
+    theme_fit: float | None = None
 
 
 def find_rhymes(

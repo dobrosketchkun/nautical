@@ -43,6 +43,7 @@ class MultiwordResult:
     ipa: str
     score: float
     chunks: list[tuple[str, Alignment]]
+    theme_fit: float | None = None
 
 
 @dataclass

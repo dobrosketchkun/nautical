@@ -14,6 +14,8 @@ from .db import loader
 from .phonetics import distance as distance_service
 from .search import decoder as multiword_search
 from .search import words as word_search
+from .semantics import theme as theme_service
+from .semantics import vectors as vectors_service
 
 # Force UTF-8 on stdout/stderr so IPA and box-drawing characters survive on
 # Windows consoles (default cp1252 cannot encode them).
@@ -26,6 +28,8 @@ for _stream in (sys.stdout, sys.stderr):
 app = typer.Typer(help="Nautical - offline phonetic rhyme discovery workbench.")
 db_app = typer.Typer(help="Database operations.")
 app.add_typer(db_app, name="db")
+vectors_app = typer.Typer(help="Semantic vector operations (GloVe).")
+app.add_typer(vectors_app, name="vectors")
 
 console = Console()
 
@@ -71,6 +75,56 @@ def stats() -> None:
     table.add_row("Schema version", info.get("schema_version", "?"))
     table.add_row("Built at", info.get("built_at", "?"))
     table.add_row("DB path", info.get("db_path", "?"))
+    console.print(table)
+
+
+@vectors_app.command("build")
+def vectors_build(
+    force: bool = typer.Option(
+        False, "--force", help="Rebuild the vector cache even if it exists."
+    ),
+    dim: int = typer.Option(
+        vectors_service.GLOVE_DIM, "--dim", help="GloVe dimension (informational)."
+    ),
+) -> None:
+    """Download (if needed) and cache GloVe vectors filtered to the lexicon."""
+    if dim != vectors_service.GLOVE_DIM:
+        console.print(
+            f"[yellow]Note:[/yellow] this build is wired for "
+            f"{vectors_service.GLOVE_DIM}d; --dim is informational."
+        )
+    try:
+        with console.status("Building GloVe vector cache (downloads once)..."):
+            stats = vectors_service.build_vectors(force=force)
+    except vectors_service.VectorsUnavailable as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    console.print(
+        f"[green]Cached[/green] {stats['rows']:,} vectors x {stats['dim']}d."
+    )
+
+
+@vectors_app.command("stats")
+def vectors_stats() -> None:
+    """Print vector-cache dimensions, row count, and paths."""
+    from .config import GLOVE_MATRIX, GLOVE_VOCAB
+
+    if not (GLOVE_MATRIX.exists() and GLOVE_VOCAB.exists()):
+        console.print(
+            "[red]No vector cache.[/red] Run [bold]nautical vectors build[/bold]."
+        )
+        raise typer.Exit(code=1)
+
+    vecs = vectors_service.Vectors.load()
+    size_mb = GLOVE_MATRIX.stat().st_size / (1024 * 1024)
+    table = Table(title="Nautical vectors")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="white")
+    table.add_row("Rows", f"{len(vecs.vocab):,}")
+    table.add_row("Dimensions", str(vecs.matrix.shape[1]))
+    table.add_row("Matrix size", f"{size_mb:.1f} MB")
+    table.add_row("Matrix path", str(GLOVE_MATRIX))
+    table.add_row("Vocab path", str(GLOVE_VOCAB))
     console.print(table)
 
 
@@ -193,6 +247,16 @@ def distance(
     console.print(result.alignment.pretty())
 
 
+def _ensure_vectors_or_exit() -> vectors_service.Vectors:
+    """Load vectors (building/downloading if needed) or exit with guidance."""
+    try:
+        with console.status("Loading semantic vectors (downloads once if absent)..."):
+            return vectors_service.ensure_vectors()
+    except vectors_service.VectorsUnavailable as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+
 def _parse_anchor(value: str | None, default: float) -> float:
     """Parse an ``--anchor`` value: ``tail`` -> 1.0, ``full`` -> 0.0, or a float."""
     if value is None:
@@ -228,6 +292,17 @@ def rhymes(
     min_similarity: float = typer.Option(
         0.0, "--min-similarity", min=0.0, max=1.0, help="Drop results below this sim."
     ),
+    theme: str = typer.Option(
+        None,
+        "--theme",
+        help="Rerank by semantic fit to these terms, e.g. 'ocean, sea, ship'.",
+    ),
+    theme_weight: float = typer.Option(
+        0.5, "--theme-weight", min=0.0, max=1.0, help="Blend: 0 = phonetics, 1 = theme."
+    ),
+    min_theme: float = typer.Option(
+        None, "--min-theme", help="Drop results whose theme_fit is below this (-1..1)."
+    ),
     include_self: bool = typer.Option(
         False, "--include-self", help="Include the query word itself in results."
     ),
@@ -247,6 +322,7 @@ def rhymes(
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Find single-word (or, with --multiword, multi-word) sound-alikes."""
+    theme_terms = theme_service.parse_terms(theme) if theme else []
     if multiword:
         _rhymes_multiword(
             text,
@@ -258,14 +334,20 @@ def rhymes(
             strictness=strictness,
             anchor=_parse_anchor(anchor, default=0.0),
             min_similarity=min_similarity,
+            theme_terms=theme_terms,
+            theme_weight=theme_weight,
+            min_theme=min_theme,
             show_align=show_align,
             as_json=as_json,
         )
         return
 
+    # When reranking by theme, pull a wider phonetic window so a semantically
+    # relevant but phonetically lower match can float into the final top-N.
+    fetch_limit = max(limit, 200) if theme_terms else limit
     results = word_search.find_rhymes(
         text,
-        limit=limit,
+        limit=fetch_limit,
         pool=pool,
         strictness=strictness,
         anchor=_parse_anchor(anchor, default=0.5),
@@ -273,6 +355,13 @@ def rhymes(
     )
     if min_similarity > 0.0:
         results = [r for r in results if r.similarity >= min_similarity]
+
+    if theme_terms:
+        vecs = _ensure_vectors_or_exit()
+        results = theme_service.apply_theme(
+            results, theme_terms, vecs, weight=theme_weight, min_theme=min_theme
+        )
+    results = results[:limit]
 
     if as_json:
         typer.echo(
@@ -287,6 +376,11 @@ def rhymes(
                         "frequency": r.frequency,
                         "syllable_count": r.syllable_count,
                         "ipa": r.ipa,
+                        **(
+                            {"theme_fit": round(r.theme_fit, 4)}
+                            if r.theme_fit is not None
+                            else {}
+                        ),
                     }
                     for r in results
                 ],
@@ -306,20 +400,23 @@ def rhymes(
     table.add_column("Sim", justify="right", style="magenta")
     table.add_column("Full", justify="right")
     table.add_column("Tail", justify="right")
+    if theme_terms:
+        table.add_column("Theme", justify="right", style="green")
     table.add_column("Stress", justify="right")
     table.add_column("Syll", justify="right")
     table.add_column("IPA")
     for i, r in enumerate(results, start=1):
-        table.add_row(
+        row = [
             str(i),
             r.word,
             f"{r.similarity:.3f}",
             f"{r.full_similarity:.2f}",
             f"{r.tail_similarity:.2f}",
-            f"{r.stress_similarity:.2f}",
-            str(r.syllable_count),
-            r.ipa,
-        )
+        ]
+        if theme_terms:
+            row.append(f"{r.theme_fit:+.2f}" if r.theme_fit is not None else "-")
+        row += [f"{r.stress_similarity:.2f}", str(r.syllable_count), r.ipa]
+        table.add_row(*row)
     console.print(table)
 
     if show_align:
@@ -338,12 +435,16 @@ def _rhymes_multiword(
     strictness: float,
     anchor: float,
     min_similarity: float,
+    theme_terms: list[str],
+    theme_weight: float,
+    min_theme: float | None,
     show_align: bool,
     as_json: bool,
 ) -> None:
+    fetch_limit = max(limit, 100) if theme_terms else limit
     results = multiword_search.find_multiword(
         text,
-        limit=limit,
+        limit=fetch_limit,
         beam_width=beam,
         cand_per_pos=pool,
         max_words=max_words,
@@ -353,6 +454,13 @@ def _rhymes_multiword(
     )
     if min_similarity > 0.0:
         results = [r for r in results if r.similarity >= min_similarity]
+
+    if theme_terms:
+        vecs = _ensure_vectors_or_exit()
+        results = theme_service.apply_theme(
+            results, theme_terms, vecs, weight=theme_weight, min_theme=min_theme
+        )
+    results = results[:limit]
 
     if as_json:
         typer.echo(
@@ -367,6 +475,11 @@ def _rhymes_multiword(
                         "naturalness": round(r.naturalness, 4),
                         "num_words": r.num_words,
                         "ipa": r.ipa,
+                        **(
+                            {"theme_fit": round(r.theme_fit, 4)}
+                            if r.theme_fit is not None
+                            else {}
+                        ),
                     }
                     for r in results
                 ],
@@ -386,18 +499,22 @@ def _rhymes_multiword(
     table.add_column("Score", justify="right", style="magenta")
     table.add_column("Sim", justify="right")
     table.add_column("Nat", justify="right")
+    if theme_terms:
+        table.add_column("Theme", justify="right", style="green")
     table.add_column("Words", justify="right")
     table.add_column("IPA")
     for i, r in enumerate(results, start=1):
-        table.add_row(
+        row = [
             str(i),
             r.phrase,
             f"{r.score:.3f}",
             f"{r.similarity:.3f}",
             f"{r.naturalness:.2f}",
-            str(r.num_words),
-            r.ipa,
-        )
+        ]
+        if theme_terms:
+            row.append(f"{r.theme_fit:+.2f}" if r.theme_fit is not None else "-")
+        row += [str(r.num_words), r.ipa]
+        table.add_row(*row)
     console.print(table)
 
     if show_align:
@@ -406,6 +523,58 @@ def _rhymes_multiword(
             for word, alignment in r.chunks:
                 console.print(f"  [dim]{word}[/dim]")
                 console.print(alignment.pretty())
+
+
+@app.command("chain")
+def chain(
+    seed: str = typer.Argument(..., help="Seed word(s), comma-separated (e.g. 'bank')."),
+    limit: int = typer.Option(25, "--limit", help="Number of related words to return."),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+) -> None:
+    """Expand a seed into a pool of semantically related words (GloVe)."""
+    seeds = theme_service.parse_terms(seed)
+    if not seeds:
+        console.print("[yellow]Provide at least one seed word.[/yellow]")
+        raise typer.Exit(code=1)
+
+    vecs = _ensure_vectors_or_exit()
+    seed_vec = vecs.term_vector(seeds)
+    if seed_vec is None:
+        console.print(
+            f"[yellow]None of the seed(s) are in the vocabulary:[/yellow] "
+            f"{', '.join(seeds)}"
+        )
+        raise typer.Exit(code=1)
+
+    neighbors = vecs.most_similar(seed_vec, topn=limit, exclude=set(seeds))
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "seed": seeds,
+                    "related": [
+                        {"word": word, "similarity": round(score, 4)}
+                        for word, score in neighbors
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    if not neighbors:
+        console.print(f"[yellow]No related words found for[/yellow] {seeds}.")
+        return
+
+    table = Table(title=f"Semantic chain: {', '.join(seeds)}")
+    table.add_column("#", justify="right", style="dim")
+    table.add_column("Word", style="cyan")
+    table.add_column("Similarity", justify="right", style="magenta")
+    for i, (word, score) in enumerate(neighbors, start=1):
+        table.add_row(str(i), word, f"{score:.3f}")
+    console.print(table)
 
 
 if __name__ == "__main__":
