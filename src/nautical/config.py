@@ -10,6 +10,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
 DB_PATH = DATA_DIR / "nautical.db"
+# Query-result cache; a separate file so it survives `db build` and needs no
+# SCHEMA_VERSION bump. Rebuildable, gitignored under data/.
+CACHE_DB_PATH = DATA_DIR / "cache.db"
 
 SCHEMA_VERSION = "5"
 

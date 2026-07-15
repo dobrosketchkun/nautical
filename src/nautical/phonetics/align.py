@@ -62,6 +62,39 @@ class Alignment:
         )
 
 
+def alignment_to_dict(alignment: Alignment) -> dict:
+    """Serialize an Alignment to a JSON-friendly dict (for the result cache)."""
+    return {
+        "total_cost": alignment.total_cost,
+        "pairs": [
+            {
+                "src": None
+                if p.src is None
+                else [p.src.ipa, p.src.stress, p.src.is_vowel],
+                "tgt": None
+                if p.tgt is None
+                else [p.tgt.ipa, p.tgt.stress, p.tgt.is_vowel],
+                "op": p.op,
+                "cost": p.cost,
+            }
+            for p in alignment.pairs
+        ],
+    }
+
+
+def alignment_from_dict(data: dict) -> Alignment:
+    """Rebuild an Alignment from :func:`alignment_to_dict` output."""
+
+    def _seg(v: list | None) -> Seg | None:
+        return None if v is None else Seg(ipa=v[0], stress=v[1], is_vowel=v[2])
+
+    pairs = [
+        AlignedPair(src=_seg(p["src"]), tgt=_seg(p["tgt"]), op=p["op"], cost=p["cost"])
+        for p in data["pairs"]
+    ]
+    return Alignment(pairs=pairs, total_cost=data["total_cost"])
+
+
 def _strictness_scale(strictness: float) -> float:
     # 0.0 -> 0.6 (forgiving), 0.5 -> 1.0, 1.0 -> 1.4 (strict)
     return 0.6 + 0.8 * strictness

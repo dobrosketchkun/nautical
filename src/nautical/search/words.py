@@ -5,8 +5,9 @@ from __future__ import annotations
 import sqlite3
 from dataclasses import dataclass
 
+from .. import cache as cache_service
 from ..config import DB_PATH
-from ..phonetics.align import Alignment
+from ..phonetics.align import Alignment, alignment_from_dict, alignment_to_dict
 from ..phonetics.anchor import anchored_score, rhyme_tail, segs_from_stored
 from ..pronounce import enriched_segments, tokenize
 from .index import candidate_ids, tail_candidate_ids
@@ -29,6 +30,56 @@ class RhymeResult:
     theme_fit: float | None = None
 
 
+def _result_to_dict(r: RhymeResult) -> dict:
+    return {
+        "word": r.word,
+        "similarity": r.similarity,
+        "full_similarity": r.full_similarity,
+        "tail_similarity": r.tail_similarity,
+        "stress_similarity": r.stress_similarity,
+        "frequency": r.frequency,
+        "syllable_count": r.syllable_count,
+        "ipa": r.ipa,
+        "alignment": alignment_to_dict(r.alignment),
+    }
+
+
+def _result_from_dict(d: dict) -> RhymeResult:
+    return RhymeResult(
+        word=d["word"],
+        similarity=d["similarity"],
+        full_similarity=d["full_similarity"],
+        tail_similarity=d["tail_similarity"],
+        stress_similarity=d["stress_similarity"],
+        frequency=d["frequency"],
+        syllable_count=d["syllable_count"],
+        ipa=d["ipa"],
+        alignment=alignment_from_dict(d["alignment"]),
+    )
+
+
+def rhymes_cache_key(
+    text: str,
+    limit: int,
+    pool: int,
+    strictness: float,
+    anchor: float,
+    include_self: bool,
+) -> str:
+    """Cache key for a single-word search (phonetic params only)."""
+    return cache_service.make_key(
+        "rhymes",
+        text,
+        {
+            "limit": limit,
+            "pool": pool,
+            "strictness": strictness,
+            "anchor": anchor,
+            "include_self": include_self,
+        },
+    )
+
+
 def find_rhymes(
     text: str,
     limit: int = 25,
@@ -36,6 +87,7 @@ def find_rhymes(
     strictness: float = 0.5,
     anchor: float = 0.5,
     include_self: bool = False,
+    use_cache: bool = True,
     conn: sqlite3.Connection | None = None,
 ) -> list[RhymeResult]:
     """Return ranked single-word sound-alikes for ``text``.
@@ -44,7 +96,19 @@ def find_rhymes(
     dial (0 = full-span, 1 = tail-anchored) blends whole-word and rhyme-tail
     similarity; when it favors the tail, the tail n-gram index is also queried so
     end-rhymes that share little else still enter the pool.
+
+    Results are cached (keyed on the phonetic params) unless ``use_cache`` is
+    False or an explicit ``conn`` is supplied (tests pass their own DB).
     """
+    cache_key = None
+    if use_cache and conn is None:
+        cache_key = rhymes_cache_key(
+            text, limit, pool, strictness, anchor, include_self
+        )
+        cached = cache_service.cache_get(cache_key)
+        if cached is not None:
+            return [_result_from_dict(d) for d in cached]
+
     own_conn = conn is None
     if own_conn:
         conn = sqlite3.connect(DB_PATH)
@@ -102,5 +166,8 @@ def find_rhymes(
 
     results = sorted(
         best.values(), key=lambda r: (r.similarity, r.frequency), reverse=True
-    )
-    return results[:limit]
+    )[:limit]
+
+    if cache_key is not None:
+        cache_service.cache_put(cache_key, [_result_to_dict(r) for r in results])
+    return results

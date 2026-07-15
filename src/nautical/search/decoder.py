@@ -18,8 +18,15 @@ import math
 import sqlite3
 from dataclasses import dataclass
 
+from .. import cache as cache_service
 from ..config import DB_PATH
-from ..phonetics.align import Alignment, Seg, align
+from ..phonetics.align import (
+    Alignment,
+    Seg,
+    align,
+    alignment_from_dict,
+    alignment_to_dict,
+)
 from ..phonetics.anchor import rhyme_tail, segs_from_stored
 from ..phonetics.distance import _stress_similarity, _stress_string, score_segments
 from ..pronounce import enriched_segments, tokenize
@@ -44,6 +51,60 @@ class MultiwordResult:
     score: float
     chunks: list[tuple[str, Alignment]]
     theme_fit: float | None = None
+
+
+def _result_to_dict(r: MultiwordResult) -> dict:
+    return {
+        "phrase": r.phrase,
+        "words": r.words,
+        "similarity": r.similarity,
+        "stress_similarity": r.stress_similarity,
+        "naturalness": r.naturalness,
+        "num_words": r.num_words,
+        "ipa": r.ipa,
+        "score": r.score,
+        "chunks": [[w, alignment_to_dict(a)] for w, a in r.chunks],
+    }
+
+
+def _result_from_dict(d: dict) -> MultiwordResult:
+    return MultiwordResult(
+        phrase=d["phrase"],
+        words=d["words"],
+        similarity=d["similarity"],
+        stress_similarity=d["stress_similarity"],
+        naturalness=d["naturalness"],
+        num_words=d["num_words"],
+        ipa=d["ipa"],
+        score=d["score"],
+        chunks=[(w, alignment_from_dict(a)) for w, a in d["chunks"]],
+    )
+
+
+def multiword_cache_key(
+    text: str,
+    limit: int,
+    beam_width: int,
+    cand_per_pos: int,
+    max_words: int,
+    min_words: int,
+    strictness: float,
+    anchor: float,
+) -> str:
+    """Cache key for a multi-word decode (phonetic params only)."""
+    return cache_service.make_key(
+        "multiword",
+        text,
+        {
+            "limit": limit,
+            "beam_width": beam_width,
+            "cand_per_pos": cand_per_pos,
+            "max_words": max_words,
+            "min_words": min_words,
+            "strictness": strictness,
+            "anchor": anchor,
+        },
+    )
 
 
 @dataclass
@@ -157,6 +218,7 @@ def find_multiword(
     min_words: int = 2,
     strictness: float = 0.5,
     anchor: float = 0.0,
+    use_cache: bool = True,
     conn: sqlite3.Connection | None = None,
 ) -> list[MultiwordResult]:
     """Return ranked multi-word sequences that sound like ``text``.
@@ -165,7 +227,20 @@ def find_multiword(
     similarity with a rhyme-tail similarity so ``--anchor tail`` biases toward
     tilings whose ending matches the target's rhyme. Multi-word echoes are
     inherently full-span, so the default is ``0.0``.
+
+    Results are cached (keyed on the phonetic params) unless ``use_cache`` is
+    False or an explicit ``conn`` is supplied.
     """
+    cache_key = None
+    if use_cache and conn is None:
+        cache_key = multiword_cache_key(
+            text, limit, beam_width, cand_per_pos, max_words, min_words,
+            strictness, anchor,
+        )
+        cached = cache_service.cache_get(cache_key)
+        if cached is not None:
+            return [_result_from_dict(d) for d in cached]
+
     own_conn = conn is None
     if own_conn:
         conn = sqlite3.connect(DB_PATH)
@@ -261,5 +336,10 @@ def find_multiword(
         if own_conn:
             conn.close()
 
-    results = sorted(best_by_phrase.values(), key=lambda r: r.score, reverse=True)
-    return results[:limit]
+    results = sorted(best_by_phrase.values(), key=lambda r: r.score, reverse=True)[
+        :limit
+    ]
+
+    if cache_key is not None:
+        cache_service.cache_put(cache_key, [_result_to_dict(r) for r in results])
+    return results

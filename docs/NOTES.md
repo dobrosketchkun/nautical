@@ -21,6 +21,9 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 - [ ] **(P7) Weight set is untested against real examples.** The lyric weights
   (cheap unstressed/schwa/final-consonant edits, expensive stressed-vowel
   mismatch) need validation against the annotated corpus, not just intuition.
+  Now *measurable*: `nautical eval` replays `docs/eval_pairs.json` and reports
+  per-pair rank + MRR/hit-rate, so weight changes can be judged by whether ranks
+  improve. Calibration itself is still open (not done in P7).
 
 ## Deferred features (planned, not yet built)
 
@@ -87,15 +90,51 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   `gnaw to call`, `naught a cull`, `gnaw to cull`, ...). Naturalness partly
   suppresses these; an IPA-level dedupe (keep the most natural spelling per
   sound) would declutter and is a cheap future improvement.
-- [ ] **(P7) Decoder latency.** Each query aligns every onset-matching word at
-  every target position (thousands of tiny alignments), so a query is ~4s
-  (`nautical`) to ~7s (`stainless`) at defaults (`beam=300`, `cand_per_pos=350`).
-  Fine for a CLI but a caching / candidate-prefilter target for Phase 7.
+- [x] **(P7) Decoder latency - mitigated by caching.** Each query still aligns
+  every onset-matching word at every target position (thousands of tiny
+  alignments), so a *cold* query is ~seconds (single-word `stainless` ~10s,
+  multi-word decodes similar) at defaults. Phase 7 adds a SQLite result cache
+  (`src/nautical/cache.py`): repeat queries are ~1 ms. Measured: `nautical eval`
+  went 74.6s -> 61 ms cold->warm. The underlying per-query cost is unchanged (a
+  candidate-prefilter is still a future win); caching just removes the repeat
+  penalty, which is what the CLI/harness workflow hits most.
 - [ ] **(P4) Decoder ranking blend uncalibrated.** `_W_NATURALNESS=0.35`,
   `_W_WORDS=0.05` in `search/decoder.py` are first-pass constants; calibrate in
   Phase 7 against `some_lyrics.txt`.
 
 ## Decisions
+
+- **(P7) Result caching: separate `cache.db`, phonetic-only key, theme after.**
+  `src/nautical/cache.py` writes to its own `data/cache.db` (not `nautical.db`),
+  so it survives `db build` and needs no `SCHEMA_VERSION` bump. The key
+  (`make_key`) is a sha1 of the *phonetic* params only (`find_rhymes`: text,
+  limit, pool, strictness, anchor, include_self; `find_multiword`: + beam,
+  cand_per_pos, max/min words). `--theme` is applied *after* the cache (cheap
+  vector math), so one cached search serves every theme. Caching lives at the
+  service layer (`find_rhymes` / `find_multiword` gain `use_cache=True`) so the
+  CLI, tests, and the eval harness all benefit; each dataclass serializes itself
+  (including alignment pairs, so `--align` still renders from a cache hit).
+  Invalidation is by key only: after changing phonetic weights or rebuilding the
+  lexicon, run `nautical cache clear` (`cache stats` shows age via `created_at`).
+  Passing an explicit `conn=` (as tests do) bypasses the cache.
+- **(P7) `typer`/`click` help crash fixed two ways.** `pyproject.toml` now pins
+  `typer>=0.16` (0.16 is compatible with click 8.2's required
+  `make_metavar(ctx)` / `get_metavar(param, ctx)`), and `cli.py` also installs a
+  small runtime compatibility shim (`_install_click_typer_compat`) that makes
+  `ctx` optional. The shim is a safe no-op once typer/click agree and keeps
+  `--help` working even in environments that can't be upgraded (it is what kept
+  the CLI usable while the env still had typer 0.15.2).
+- **(P7) Eval corpus is curated ground truth, not scraped.** `docs/eval_pairs.json`
+  is hand-verified from `docs/some_lyrics.txt` (web lyric pages were too
+  unreliable to auto-seed). It is user-extensible: add hand-verified pairs and
+  re-run `nautical eval`. EN-JP echoes and transformation puns (`pun-stoppable`,
+  `Ina-terested`, `Ina-sanity`) are deliberately excluded (out of scope for Step
+  One). The harness (`src/nautical/eval.py`) makes the calibration debts below
+  *measurable*: baseline on the seed corpus is hit-rate@50 7/9 (78%), MRR 0.383,
+  median rank 2; `not a cult -> nautical` is rank 6 phonetically and rank 1 with
+  `--theme "ocean, sea, ship"`; the two reverse multi-word decodes
+  (`nautical -> not a cult`, `clean and stainless -> acting brainless`) are misses,
+  the known Phase 4/6 semantic gap, reported honestly rather than hidden.
 
 - **(P6) GloVe 6B 300d, auto-downloaded on first use.** The semantic layer uses
   GloVe 6B (300d). `semantics/vectors.py:ensure_vectors()` lazily downloads

@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import sys
+import time
+from pathlib import Path
 
 import typer
 from rich.console import Console
 from rich.table import Table
 
+from . import cache as cache_service
+from . import eval as eval_service
 from . import pronounce as pronounce_service
 from .db import loader
 from .phonetics import distance as distance_service
@@ -25,11 +29,88 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
+
+def _install_click_typer_compat() -> None:
+    """Keep ``--help`` rendering under click >= 8.2 with older typer.
+
+    click 8.2 made ``Parameter.make_metavar(ctx)`` and
+    ``ParamType.get_metavar(param, ctx)`` require the ``ctx`` argument, but
+    typer 0.15 calls them without it (and typer's ``TyperArgument`` overrides
+    ``make_metavar(self)``), so help rendering raises ``TypeError``. Upgrading
+    typer is the clean fix, but this makes the CLI robust even when the
+    environment can't be upgraded. It is a safe no-op once typer/click agree.
+    """
+    import inspect
+
+    import click
+    from click.core import Parameter
+    from click.types import ParamType
+
+    if getattr(_install_click_typer_compat, "_done", False):
+        return
+
+    def _resolve_ctx(ctx):
+        if ctx is not None:
+            return ctx
+        ctx = click.get_current_context(silent=True)
+        if ctx is not None:
+            return ctx
+        return click.Context(click.Command("nautical"))
+
+    if "ctx" in inspect.signature(ParamType.get_metavar).parameters:
+        _orig_get_metavar = ParamType.get_metavar
+
+        def _get_metavar(self, param, ctx=None):  # type: ignore[override]
+            return _orig_get_metavar(self, param, _resolve_ctx(ctx))
+
+        ParamType.get_metavar = _get_metavar
+
+    if "ctx" in inspect.signature(Parameter.make_metavar).parameters:
+        _orig_make_metavar = Parameter.make_metavar
+
+        def _make_metavar(self, ctx=None):  # type: ignore[override]
+            return _orig_make_metavar(self, _resolve_ctx(ctx))
+
+        Parameter.make_metavar = _make_metavar
+
+    # typer's TyperArgument overrides make_metavar(self); click 8.2 calls it as
+    # make_metavar(ctx). Give it a signature that works either way.
+    try:
+        from typer.core import TyperArgument
+    except ImportError:
+        TyperArgument = None
+    if TyperArgument is not None:
+
+        def _typer_arg_make_metavar(self, ctx=None):  # type: ignore[override]
+            if self.metavar is not None:
+                return self.metavar
+            var = (self.name or "").upper()
+            if not self.required:
+                var = f"[{var}]"
+            try:
+                type_var = self.type.get_metavar(self, _resolve_ctx(ctx))
+            except TypeError:
+                type_var = self.type.get_metavar(self)
+            if type_var:
+                var += f":{type_var}"
+            if self.nargs != 1:
+                var += "..."
+            return var
+
+        TyperArgument.make_metavar = _typer_arg_make_metavar
+
+    _install_click_typer_compat._done = True  # type: ignore[attr-defined]
+
+
+_install_click_typer_compat()
+
 app = typer.Typer(help="Nautical - offline phonetic rhyme discovery workbench.")
 db_app = typer.Typer(help="Database operations.")
 app.add_typer(db_app, name="db")
 vectors_app = typer.Typer(help="Semantic vector operations (GloVe).")
 app.add_typer(vectors_app, name="vectors")
+cache_app = typer.Typer(help="Query-result cache operations.")
+app.add_typer(cache_app, name="cache")
 
 console = Console()
 
@@ -75,6 +156,33 @@ def stats() -> None:
     table.add_row("Schema version", info.get("schema_version", "?"))
     table.add_row("Built at", info.get("built_at", "?"))
     table.add_row("DB path", info.get("db_path", "?"))
+
+    cache_info = cache_service.stats()
+    cache_mb = cache_info["size_bytes"] / (1024 * 1024)
+    table.add_row("Cache", f"{cache_info['rows']:,} entries ({cache_mb:.1f} MB)")
+    console.print(table)
+
+
+@cache_app.command("clear")
+def cache_clear() -> None:
+    """Delete all cached query results."""
+    removed = cache_service.clear()
+    console.print(f"[green]Cleared[/green] {removed:,} cached result set(s).")
+
+
+@cache_app.command("stats")
+def cache_stats() -> None:
+    """Print cache row count, size, and age span."""
+    info = cache_service.stats()
+    size_mb = info["size_bytes"] / (1024 * 1024)
+    table = Table(title="Nautical query cache")
+    table.add_column("Field", style="cyan")
+    table.add_column("Value", style="white")
+    table.add_row("Entries", f"{info['rows']:,}")
+    table.add_row("Size", f"{size_mb:.1f} MB")
+    table.add_row("Oldest", str(info["oldest"] or "-"))
+    table.add_row("Newest", str(info["newest"] or "-"))
+    table.add_row("Path", info["path"])
     console.print(table)
 
 
@@ -257,6 +365,14 @@ def _ensure_vectors_or_exit() -> vectors_service.Vectors:
         raise typer.Exit(code=1)
 
 
+_ALIGN_LEGEND = "[dim]align legend: = match  ~ substitute  + insert  x delete[/dim]"
+
+
+def _result_summary(count: int, elapsed: float, cached: bool) -> str:
+    tag = " [green](cached)[/green]" if cached else ""
+    return f"[dim]{count} result(s) in {elapsed * 1000:.0f} ms{tag}[/dim]"
+
+
 def _parse_anchor(value: str | None, default: float) -> float:
     """Parse an ``--anchor`` value: ``tail`` -> 1.0, ``full`` -> 0.0, or a float."""
     if value is None:
@@ -319,6 +435,9 @@ def rhymes(
     show_align: bool = typer.Option(
         False, "--align", help="Print the phoneme alignment for each result."
     ),
+    no_cache: bool = typer.Option(
+        False, "--no-cache", help="Bypass the query-result cache for this search."
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Find single-word (or, with --multiword, multi-word) sound-alikes."""
@@ -338,6 +457,7 @@ def rhymes(
             theme_weight=theme_weight,
             min_theme=min_theme,
             show_align=show_align,
+            use_cache=not no_cache,
             as_json=as_json,
         )
         return
@@ -345,14 +465,24 @@ def rhymes(
     # When reranking by theme, pull a wider phonetic window so a semantically
     # relevant but phonetically lower match can float into the final top-N.
     fetch_limit = max(limit, 200) if theme_terms else limit
+    anchor_val = _parse_anchor(anchor, default=0.5)
+    use_cache = not no_cache
+    cached = use_cache and cache_service.cache_get(
+        word_search.rhymes_cache_key(
+            text, fetch_limit, pool, strictness, anchor_val, include_self
+        )
+    ) is not None
+    started = time.perf_counter()
     results = word_search.find_rhymes(
         text,
         limit=fetch_limit,
         pool=pool,
         strictness=strictness,
-        anchor=_parse_anchor(anchor, default=0.5),
+        anchor=anchor_val,
         include_self=include_self,
+        use_cache=use_cache,
     )
+    elapsed = time.perf_counter() - started
     if min_similarity > 0.0:
         results = [r for r in results if r.similarity >= min_similarity]
 
@@ -418,8 +548,10 @@ def rhymes(
         row += [f"{r.stress_similarity:.2f}", str(r.syllable_count), r.ipa]
         table.add_row(*row)
     console.print(table)
+    console.print(_result_summary(len(results), elapsed, cached))
 
     if show_align:
+        console.print(_ALIGN_LEGEND)
         for r in results:
             console.print(f"\n[cyan]{r.word}[/cyan] ({r.similarity:.3f})")
             console.print(r.alignment.pretty())
@@ -439,9 +571,16 @@ def _rhymes_multiword(
     theme_weight: float,
     min_theme: float | None,
     show_align: bool,
+    use_cache: bool,
     as_json: bool,
 ) -> None:
     fetch_limit = max(limit, 100) if theme_terms else limit
+    cached = use_cache and cache_service.cache_get(
+        multiword_search.multiword_cache_key(
+            text, fetch_limit, beam, pool, max_words, min_words, strictness, anchor
+        )
+    ) is not None
+    started = time.perf_counter()
     results = multiword_search.find_multiword(
         text,
         limit=fetch_limit,
@@ -451,7 +590,9 @@ def _rhymes_multiword(
         min_words=min_words,
         strictness=strictness,
         anchor=anchor,
+        use_cache=use_cache,
     )
+    elapsed = time.perf_counter() - started
     if min_similarity > 0.0:
         results = [r for r in results if r.similarity >= min_similarity]
 
@@ -516,8 +657,10 @@ def _rhymes_multiword(
         row += [str(r.num_words), r.ipa]
         table.add_row(*row)
     console.print(table)
+    console.print(_result_summary(len(results), elapsed, cached))
 
     if show_align:
+        console.print(_ALIGN_LEGEND)
         for r in results:
             console.print(f"\n[cyan]{r.phrase}[/cyan] ({r.score:.3f})")
             for word, alignment in r.chunks:
@@ -575,6 +718,107 @@ def chain(
     for i, (word, score) in enumerate(neighbors, start=1):
         table.add_row(str(i), word, f"{score:.3f}")
     console.print(table)
+
+
+@app.command("eval")
+def eval_cmd(
+    pairs_path: str = typer.Option(
+        None, "--pairs", help="Corpus JSON (default: docs/eval_pairs.json)."
+    ),
+    limit: int = typer.Option(50, "--limit", help="Rank window: hit if within top-N."),
+    no_cache: bool = typer.Option(
+        False, "--no-cache", help="Bypass the query-result cache."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+) -> None:
+    """Replay the curated corpus and report rediscovery rank + MRR/hit-rate."""
+    path = Path(pairs_path) if pairs_path else eval_service.DEFAULT_PAIRS_PATH
+    try:
+        pairs = eval_service.load_pairs(path)
+    except FileNotFoundError:
+        console.print(f"[red]Corpus not found:[/red] {path}")
+        raise typer.Exit(code=1)
+    if not pairs:
+        console.print(f"[yellow]No pairs in corpus:[/yellow] {path}")
+        raise typer.Exit(code=1)
+
+    # Load vectors once only if some pair asks for a theme rerank.
+    vectors = None
+    if any(p.get("theme") for p in pairs):
+        vectors = _ensure_vectors_or_exit()
+
+    started = time.perf_counter()
+    report = eval_service.run_eval(
+        pairs, limit=limit, use_cache=not no_cache, vectors=vectors
+    )
+    elapsed = time.perf_counter() - started
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "limit": report.limit,
+                    "total": report.total,
+                    "hits": report.hits,
+                    "hit_rate": round(report.hit_rate, 4),
+                    "mrr": round(report.mrr, 4),
+                    "median_rank": report.median_rank,
+                    "rows": [
+                        {
+                            "query": r.query,
+                            "expected": r.expected,
+                            "mode": r.mode,
+                            "anchor": r.anchor,
+                            "theme": r.theme,
+                            "found": r.found,
+                            "rank": r.rank,
+                            "similarity": round(r.similarity, 4)
+                            if r.similarity is not None
+                            else None,
+                            "theme_fit": round(r.theme_fit, 4)
+                            if r.theme_fit is not None
+                            else None,
+                        }
+                        for r in report.rows
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    table = Table(title=f"Evaluation ({path.name})")
+    table.add_column("Query", style="cyan")
+    table.add_column("Expected", style="cyan")
+    table.add_column("Mode")
+    table.add_column("Anchor")
+    table.add_column("Theme", style="green")
+    table.add_column("Rank", justify="right", style="magenta")
+    table.add_column("Sim", justify="right")
+    for r in report.rows:
+        rank_str = str(r.rank) if r.rank is not None else "[red]-[/red]"
+        sim_str = f"{r.similarity:.3f}" if r.similarity is not None else "-"
+        table.add_row(
+            r.query,
+            r.expected,
+            r.mode,
+            r.anchor,
+            r.theme or "-",
+            rank_str,
+            sim_str,
+        )
+    console.print(table)
+
+    median = report.median_rank
+    median_str = f"{median:.0f}" if median is not None else "-"
+    console.print(
+        f"[bold]hit-rate@{report.limit}:[/bold] {report.hits}/{report.total} "
+        f"({report.hit_rate:.0%})   "
+        f"[bold]MRR:[/bold] {report.mrr:.3f}   "
+        f"[bold]median rank (hits):[/bold] {median_str}"
+    )
+    console.print(_result_summary(report.total, elapsed, cached=False))
 
 
 if __name__ == "__main__":
