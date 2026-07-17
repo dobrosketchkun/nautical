@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 import editdistance
 
@@ -69,6 +70,7 @@ def phonetic_distance(
     strictness: float = 0.5,
     word_boundary_leniency: bool = True,
     multi_variant: bool = True,
+    db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> DistanceResult:
     """Compute the decomposed phonetic distance between two texts.
@@ -79,7 +81,7 @@ def phonetic_distance(
     """
     own_conn = conn is None
     if own_conn:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(Path(db_path) if db_path is not None else DB_PATH)
     try:
         if multi_variant:
             variants_a = enriched_segment_variants(text_a, conn=conn)

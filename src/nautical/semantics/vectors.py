@@ -21,17 +21,16 @@ from urllib.error import URLError
 import numpy as np
 
 from ..config import (
+    DEFAULT_PATHS,
     DB_PATH,
     GLOVE_DIM,
-    GLOVE_MATRIX,
-    GLOVE_RAW,
-    GLOVE_VOCAB,
     GLOVE_ZIP_URLS,
-    ensure_vectors_dir,
+    NauticalPaths,
 )
+from ..errors import NauticalError
 
 
-class VectorsUnavailable(RuntimeError):
+class VectorsUnavailable(NauticalError):
     """Raised when vectors cannot be loaded or built (e.g. no lexicon)."""
 
 
@@ -64,16 +63,21 @@ def lexicon_words(db_path: Path | None = None) -> set[str]:
 _lexicon_words = lexicon_words
 
 
-def download_glove(dest: Path | None = None) -> Path:
+def download_glove(
+    dest: Path | None = None,
+    *,
+    paths: NauticalPaths | None = None,
+) -> Path:
     """Download ``glove.6B.zip`` and extract the target-dimension text file.
 
     Returns the path to the extracted ``glove.6B.<dim>d.txt``. Tries each URL in
     :data:`GLOVE_ZIP_URLS` in turn.
     """
-    dest = Path(dest) if dest is not None else GLOVE_RAW
-    ensure_vectors_dir()
+    paths = paths or DEFAULT_PATHS
+    dest = Path(dest) if dest is not None else paths.glove_raw
+    paths.ensure_vectors_dir()
     member = f"glove.6B.{GLOVE_DIM}d.txt"
-    zip_path = dest.parent / "glove.6B.zip"
+    zip_path = paths.glove_zip if dest == paths.glove_raw else dest.parent / "glove.6B.zip"
 
     if not zip_path.exists():
         last_error: Exception | None = None
@@ -100,7 +104,35 @@ def download_glove(dest: Path | None = None) -> Path:
     return dest
 
 
-def build_vectors(force: bool = False, db_path: Path | None = None) -> dict[str, int]:
+def _migrate_legacy_matrix(paths: NauticalPaths) -> None:
+    """Rename the pre-Phase-10 full-vocabulary cache if it exists."""
+    legacy = paths.vectors_dir / f"glove.6B.{GLOVE_DIM}d.filtered.npy"
+    if not paths.glove_matrix.exists() and legacy.exists():
+        legacy.replace(paths.glove_matrix)
+
+
+def _cleanup_build_inputs(paths: NauticalPaths) -> None:
+    """Keep only the two files required at runtime."""
+    paths.glove_raw.unlink(missing_ok=True)
+    paths.glove_zip.unlink(missing_ok=True)
+
+
+def vectors_ready(paths: NauticalPaths | None = None) -> bool:
+    """Return whether both runtime artifacts exist, migrating old cache names."""
+    paths = paths or DEFAULT_PATHS
+    _migrate_legacy_matrix(paths)
+    ready = paths.glove_matrix.exists() and paths.glove_vocab.exists()
+    if ready:
+        _cleanup_build_inputs(paths)
+    return ready
+
+
+def build_vectors(
+    force: bool = False,
+    db_path: Path | None = None,
+    *,
+    paths: NauticalPaths | None = None,
+) -> dict[str, int]:
     """Cache the full normalized GloVe matrix (no lexicon filtering).
 
     Every vector in the raw file is kept so any theme/seed word resolves; the
@@ -108,19 +140,21 @@ def build_vectors(force: bool = False, db_path: Path | None = None) -> dict[str,
     raw file first if it is absent. The ``db_path`` argument is accepted for
     backward compatibility but no longer used. Returns a small stats dict.
     """
-    ensure_vectors_dir()
-    if GLOVE_MATRIX.exists() and GLOVE_VOCAB.exists() and not force:
-        vocab = GLOVE_VOCAB.read_text(encoding="utf-8").split("\n")
+    paths = paths or DEFAULT_PATHS
+    paths.ensure_vectors_dir()
+    if vectors_ready(paths) and not force:
+        _cleanup_build_inputs(paths)
+        vocab = paths.glove_vocab.read_text(encoding="utf-8").split("\n")
         vocab = [w for w in vocab if w]
         return {"rows": len(vocab), "dim": GLOVE_DIM}
 
-    if not GLOVE_RAW.exists():
-        download_glove()
+    if not paths.glove_raw.exists():
+        download_glove(paths=paths)
 
     words: list[str] = []
     rows: list[np.ndarray] = []
-    _log(f"[cyan]Loading[/cyan] full vocabulary from {GLOVE_RAW.name}...")
-    with open(GLOVE_RAW, "r", encoding="utf-8") as fh:
+    _log(f"[cyan]Loading[/cyan] full vocabulary from {paths.glove_raw.name}...")
+    with open(paths.glove_raw, "r", encoding="utf-8") as fh:
         for line in fh:
             space = line.find(" ")
             if space <= 0:
@@ -141,8 +175,12 @@ def build_vectors(force: bool = False, db_path: Path | None = None) -> dict[str,
         )
 
     matrix = np.vstack(rows).astype(np.float32)
-    np.save(GLOVE_MATRIX, matrix)
-    GLOVE_VOCAB.write_text("\n".join(words), encoding="utf-8")
+    np.save(paths.glove_matrix, matrix)
+    paths.glove_vocab.write_text("\n".join(words), encoding="utf-8")
+    # Validate both runtime artifacts before discarding the large build inputs.
+    if not paths.glove_matrix.exists() or not paths.glove_vocab.exists():
+        raise VectorsUnavailable("Vector cache build did not produce both runtime files.")
+    _cleanup_build_inputs(paths)
     _log(f"[green]Cached[/green] {matrix.shape[0]:,} vectors x {matrix.shape[1]}d.")
     return {"rows": matrix.shape[0], "dim": matrix.shape[1]}
 
@@ -156,13 +194,17 @@ class Vectors:
         self.index: dict[str, int] = {w: i for i, w in enumerate(vocab)}
 
     @classmethod
-    def load(cls) -> "Vectors":
-        if not (GLOVE_MATRIX.exists() and GLOVE_VOCAB.exists()):
+    def load(cls, paths: NauticalPaths | None = None) -> "Vectors":
+        paths = paths or DEFAULT_PATHS
+        if not vectors_ready(paths):
             raise VectorsUnavailable(
                 "Vector cache missing. Run `nautical vectors build`."
             )
-        matrix = np.load(GLOVE_MATRIX, mmap_mode="r")
-        vocab = [w for w in GLOVE_VOCAB.read_text(encoding="utf-8").split("\n") if w]
+        _cleanup_build_inputs(paths)
+        matrix = np.load(paths.glove_matrix, mmap_mode="r")
+        vocab = [
+            w for w in paths.glove_vocab.read_text(encoding="utf-8").split("\n") if w
+        ]
         return cls(matrix, vocab)
 
     @classmethod
@@ -246,19 +288,26 @@ class Vectors:
         return out
 
 
-_CACHE: Vectors | None = None
+_CACHE: dict[Path, Vectors] = {}
 
 
-def ensure_vectors(db_path: Path | None = None) -> Vectors:
+def ensure_vectors(
+    db_path: Path | None = None,
+    *,
+    paths: NauticalPaths | None = None,
+) -> Vectors:
     """Return a loaded :class:`Vectors`, building/downloading it if necessary.
 
     This is the lazy "just works on a fresh checkout" entry point used by the
     semantic CLI commands.
     """
-    global _CACHE
-    if _CACHE is not None:
-        return _CACHE
-    if not (GLOVE_MATRIX.exists() and GLOVE_VOCAB.exists()):
-        build_vectors(db_path=db_path)
-    _CACHE = Vectors.load()
-    return _CACHE
+    paths = paths or DEFAULT_PATHS
+    key = paths.vectors_dir
+    cached = _CACHE.get(key)
+    if cached is not None:
+        return cached
+    if not vectors_ready(paths):
+        build_vectors(db_path=db_path, paths=paths)
+    loaded = Vectors.load(paths)
+    _CACHE[key] = loaded
+    return loaded

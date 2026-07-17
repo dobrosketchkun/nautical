@@ -81,7 +81,11 @@ def _pronunciation_from_arpabet(phones: list[str], source: str) -> Pronunciation
     )
 
 
-def pronounce_word(word: str, conn: sqlite3.Connection | None = None) -> WordPronunciation:
+def pronounce_word(
+    word: str,
+    conn: sqlite3.Connection | None = None,
+    db_path: Path | None = None,
+) -> WordPronunciation:
     """Return the pronunciation lattice for a single word.
 
     Looks the word up in the CMUdict-backed DB first; falls back to g2p for
@@ -90,7 +94,7 @@ def pronounce_word(word: str, conn: sqlite3.Connection | None = None) -> WordPro
     normalized = _EDGE_PUNCT.sub("", word.lower())
     own_conn = conn is None
     if own_conn:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(Path(db_path) if db_path is not None else DB_PATH)
     try:
         rows = conn.execute(
             "SELECT p.arpabet, p.source FROM pronunciation p "
@@ -116,7 +120,11 @@ def pronounce_word(word: str, conn: sqlite3.Connection | None = None) -> WordPro
     return WordPronunciation(word=normalized, variants=variants)
 
 
-def pronounce_phrase(text: str, conn: sqlite3.Connection | None = None) -> PhrasePronunciation:
+def pronounce_phrase(
+    text: str,
+    conn: sqlite3.Connection | None = None,
+    db_path: Path | None = None,
+) -> PhrasePronunciation:
     """Pronounce a phrase, keeping word boundaries as metadata.
 
     ``boundary_free`` concatenates the primary variant's IPA segments across
@@ -124,7 +132,7 @@ def pronounce_phrase(text: str, conn: sqlite3.Connection | None = None) -> Phras
     """
     own_conn = conn is None
     if own_conn:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(Path(db_path) if db_path is not None else DB_PATH)
     try:
         tokens = [pronounce_word(w, conn=conn) for w in tokenize(text)]
     finally:
@@ -162,7 +170,9 @@ def _segs_from_pronunciation(pron: Pronunciation) -> list[Seg]:
 
 
 def enriched_segments(
-    text: str, conn: sqlite3.Connection | None = None
+    text: str,
+    conn: sqlite3.Connection | None = None,
+    db_path: Path | None = None,
 ) -> list[Seg]:
     """Return per-segment ``Seg(ipa, stress, is_vowel, word_final)`` for a phrase.
 
@@ -171,7 +181,7 @@ def enriched_segments(
     flagged ``word_final`` so the aligner can apply word-boundary leniency.
     Consumed by the phonetic aligner.
     """
-    phrase = pronounce_phrase(text, conn=conn)
+    phrase = pronounce_phrase(text, conn=conn, db_path=db_path)
     segments: list[Seg] = []
     for word_pron in phrase.tokens:
         primary = word_pron.primary
@@ -187,7 +197,9 @@ _MAX_PHRASE_VARIANTS = 8
 
 
 def enriched_segment_variants(
-    text: str, conn: sqlite3.Connection | None = None
+    text: str,
+    conn: sqlite3.Connection | None = None,
+    db_path: Path | None = None,
 ) -> list[list[Seg]]:
     """Return one enriched-segment list per pronunciation variant of ``text``.
 
@@ -196,7 +208,7 @@ def enriched_segment_variants(
     small (<= ``_MAX_PHRASE_VARIANTS``); otherwise it falls back to a single
     primary-variant list to avoid combinatorial blow-up.
     """
-    phrase = pronounce_phrase(text, conn=conn)
+    phrase = pronounce_phrase(text, conn=conn, db_path=db_path)
     token_variant_segs: list[list[list[Seg]]] = []
     for word_pron in phrase.tokens:
         if not word_pron.variants:

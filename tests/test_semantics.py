@@ -6,6 +6,7 @@ All tests use a tiny hand-built vector space - no network and no GloVe download.
 import numpy as np
 import pytest
 
+from nautical.config import GLOVE_DIM, NauticalPaths
 from nautical.search.words import RhymeResult
 from nautical.search.ranking import ScoreComponents
 from nautical.semantics import theme as theme_service
@@ -141,3 +142,19 @@ def test_lexicon_guard_when_db_absent(tmp_path):
     missing = tmp_path / "nope.db"
     with pytest.raises(VectorsUnavailable):
         vectors_service._lexicon_words(missing)
+
+
+def test_vector_build_keeps_only_runtime_artifacts(tmp_path):
+    paths = NauticalPaths.from_data_dir(tmp_path)
+    paths.ensure_vectors_dir()
+    values = " ".join(["1"] * GLOVE_DIM)
+    paths.glove_raw.write_text(f"ocean {values}\n", encoding="utf-8")
+    paths.glove_zip.write_bytes(b"build input placeholder")
+
+    stats = vectors_service.build_vectors(paths=paths)
+
+    assert stats == {"rows": 1, "dim": GLOVE_DIM}
+    assert paths.glove_matrix.exists()
+    assert paths.glove_vocab.exists()
+    assert not paths.glove_raw.exists()
+    assert not paths.glove_zip.exists()

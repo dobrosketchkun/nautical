@@ -16,6 +16,8 @@ dependencies = [
     "g2p_en>=2.1.0",
     "panphon>=0.20.0",
     "numpy>=1.24",
+    "editdistance>=0.8.1",
+    "platformdirs>=3.11.0",
 ]
 
 [project.optional-dependencies]
@@ -31,3 +33,4 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "nautical.db" = ["*.sql"]
+"nautical.resources" = ["*.json"]

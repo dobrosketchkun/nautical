@@ -15,7 +15,9 @@ from . import cache as cache_service
 from . import eval as eval_service
 from . import exclude as exclude_service
 from . import pronounce as pronounce_service
+from .client import Nautical
 from .db import loader
+from .errors import NauticalError, NotInitializedError
 from .phonetics import distance as distance_service
 from .search import decoder as multiword_search
 from .search import words as word_search
@@ -114,6 +116,7 @@ cache_app = typer.Typer(help="Query-result cache operations.")
 app.add_typer(cache_app, name="cache")
 
 console = Console()
+engine = Nautical()
 
 
 @db_app.command("build")
@@ -124,7 +127,7 @@ def db_build(
 ) -> None:
     """Create the schema and ingest CMUdict + wordfreq into SQLite."""
     with console.status("Building lexicon from CMUdict + wordfreq..."):
-        stats = loader.build_db(force=force)
+        stats = engine.build_db(force=force)
     console.print(
         f"[green]Built[/green] {stats['lexeme_count']:,} lexemes / "
         f"{stats['pronunciation_count']:,} pronunciations "
@@ -136,8 +139,9 @@ def db_build(
 def stats() -> None:
     """Print database counts and metadata."""
     try:
-        info = loader.get_stats()
-    except FileNotFoundError:
+        all_stats = engine.stats()
+        info = all_stats["database"]
+    except NotInitializedError:
         console.print(
             "[red]No database found.[/red] Run [bold]nautical db build[/bold] first."
         )
@@ -158,23 +162,25 @@ def stats() -> None:
     table.add_row("Built at", info.get("built_at", "?"))
     table.add_row("DB path", info.get("db_path", "?"))
 
-    cache_info = cache_service.stats()
+    cache_info = all_stats["cache"]
     cache_mb = cache_info["size_bytes"] / (1024 * 1024)
     table.add_row("Cache", f"{cache_info['rows']:,} entries ({cache_mb:.1f} MB)")
+    table.add_row("Data directory", all_stats["data_dir"])
+    table.add_row("Vectors ready", "yes" if all_stats["vectors_ready"] else "no")
     console.print(table)
 
 
 @cache_app.command("clear")
 def cache_clear() -> None:
     """Delete all cached query results."""
-    removed = cache_service.clear()
+    removed = engine.clear_cache()
     console.print(f"[green]Cleared[/green] {removed:,} cached result set(s).")
 
 
 @cache_app.command("stats")
 def cache_stats() -> None:
     """Print cache row count, size, and age span."""
-    info = cache_service.stats()
+    info = engine.cache_stats()
     size_mb = info["size_bytes"] / (1024 * 1024)
     table = Table(title="Nautical query cache")
     table.add_column("Field", style="cyan")
@@ -204,8 +210,8 @@ def vectors_build(
         )
     try:
         with console.status("Building GloVe vector cache (downloads once)..."):
-            stats = vectors_service.build_vectors(force=force)
-    except vectors_service.VectorsUnavailable as exc:
+            stats = engine.build_vectors(force=force)
+    except NauticalError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
     console.print(
@@ -216,24 +222,24 @@ def vectors_build(
 @vectors_app.command("stats")
 def vectors_stats() -> None:
     """Print vector-cache dimensions, row count, and paths."""
-    from .config import GLOVE_MATRIX, GLOVE_VOCAB
-
-    if not (GLOVE_MATRIX.exists() and GLOVE_VOCAB.exists()):
+    matrix_path = engine.paths.glove_matrix
+    vocab_path = engine.paths.glove_vocab
+    if not vectors_service.vectors_ready(engine.paths):
         console.print(
             "[red]No vector cache.[/red] Run [bold]nautical vectors build[/bold]."
         )
         raise typer.Exit(code=1)
 
-    vecs = vectors_service.Vectors.load()
-    size_mb = GLOVE_MATRIX.stat().st_size / (1024 * 1024)
+    vecs = vectors_service.Vectors.load(engine.paths)
+    size_mb = matrix_path.stat().st_size / (1024 * 1024)
     table = Table(title="Nautical vectors")
     table.add_column("Field", style="cyan")
     table.add_column("Value", style="white")
     table.add_row("Rows", f"{len(vecs.vocab):,}")
     table.add_row("Dimensions", str(vecs.matrix.shape[1]))
     table.add_row("Matrix size", f"{size_mb:.1f} MB")
-    table.add_row("Matrix path", str(GLOVE_MATRIX))
-    table.add_row("Vocab path", str(GLOVE_VOCAB))
+    table.add_row("Matrix path", str(matrix_path))
+    table.add_row("Vocab path", str(vocab_path))
     console.print(table)
 
 
@@ -270,7 +276,11 @@ def pronounce(
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Convert a word or phrase to IPA (CMUdict, with g2p fallback)."""
-    phrase = pronounce_service.pronounce_phrase(text)
+    try:
+        phrase = engine.pronounce(text)
+    except NauticalError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
 
     if as_json:
         typer.echo(json.dumps(_phrase_to_dict(phrase), ensure_ascii=False, indent=2))
@@ -325,13 +335,17 @@ def distance(
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Phonetic distance between two texts, with the aligning explanation."""
-    result = distance_service.phonetic_distance(
-        text_a,
-        text_b,
-        strictness=strictness,
-        word_boundary_leniency=not strict_boundaries,
-        multi_variant=not primary_only,
-    )
+    try:
+        result = engine.distance(
+            text_a,
+            text_b,
+            strictness=strictness,
+            word_boundary_leniency=not strict_boundaries,
+            multi_variant=not primary_only,
+        )
+    except NauticalError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
 
     if as_json:
         typer.echo(
@@ -376,8 +390,8 @@ def _ensure_vectors_or_exit() -> vectors_service.Vectors:
     """Load vectors (building/downloading if needed) or exit with guidance."""
     try:
         with console.status("Loading semantic vectors (downloads once if absent)..."):
-            return vectors_service.ensure_vectors()
-    except vectors_service.VectorsUnavailable as exc:
+            return engine.ensure_vectors()
+    except NauticalError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1)
 
@@ -489,7 +503,7 @@ def rhymes(
     exclude: str = typer.Option(
         None,
         "--exclude",
-        help="Comma/space-separated words to drop, merged with data/exclude.txt.",
+        help="Words to drop, merged with exclude.txt in the resolved data directory.",
     ),
     no_cache: bool = typer.Option(
         False, "--no-cache", help="Bypass the query-result cache for this search."
@@ -497,34 +511,8 @@ def rhymes(
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Find single-word (or, with --multiword, multi-word) sound-alikes."""
-    theme_terms = theme_service.parse_terms(theme) if theme else []
-    seed_terms = theme_service.parse_terms(seed) if seed else []
-    if seed_terms:
-        vecs = _ensure_vectors_or_exit()
-        try:
-            allowed = vectors_service.lexicon_words()
-        except vectors_service.VectorsUnavailable as exc:
-            console.print(f"[red]{exc}[/red]")
-            raise typer.Exit(code=1)
-        expanded = theme_service.expand_seed_terms(
-            seed_terms, vecs, limit=seed_limit, allowed=allowed
-        )
-        if not expanded:
-            console.print(
-                f"[yellow]None of the seed(s) are in the vector vocabulary:[/yellow] "
-                f"{', '.join(seed_terms)}"
-            )
-            raise typer.Exit(code=1)
-        theme_terms = list(dict.fromkeys([*theme_terms, *expanded]))
-        if not as_json:
-            neighbors = [term for term in expanded if term not in seed_terms]
-            console.print(
-                f"[dim]seed context ({', '.join(seed_terms)}): "
-                f"{', '.join(neighbors) if neighbors else 'no neighbors'}[/dim]"
-            )
     word_boundary_leniency = not strict_boundaries
     multi_variant = not primary_only
-    exclusions = exclude_service.resolve_exclusions(exclude)
     if multiword:
         _rhymes_multiword(
             text,
@@ -536,51 +524,53 @@ def rhymes(
             strictness=strictness,
             anchor=_parse_anchor(anchor, default=0.0),
             min_similarity=min_similarity,
-            theme_terms=theme_terms,
+            theme=theme,
+            seed=seed,
+            seed_limit=seed_limit,
             theme_weight=theme_weight,
             min_theme=min_theme,
             show_align=show_align,
             word_boundary_leniency=word_boundary_leniency,
-            exclusions=exclusions,
+            exclude=exclude,
             use_cache=not no_cache,
             as_json=as_json,
         )
         return
 
-    # When reranking by theme, pull a wider phonetic window so a semantically
-    # relevant but phonetically lower match can float into the final top-N.
-    fetch_limit = max(limit, 200) if theme_terms else limit
     anchor_val = _parse_anchor(anchor, default=0.5)
-    use_cache = not no_cache
-    cached = use_cache and cache_service.cache_get(
-        word_search.rhymes_cache_key(
-            text, fetch_limit, pool, strictness, anchor_val, include_self,
-            word_boundary_leniency, multi_variant, exclusions,
+    try:
+        response = engine.rhymes(
+            text,
+            limit=limit,
+            pool=pool,
+            strictness=strictness,
+            anchor=anchor_val,
+            min_similarity=min_similarity,
+            theme=theme,
+            seed=seed,
+            seed_limit=seed_limit,
+            theme_weight=theme_weight,
+            min_theme=min_theme,
+            include_self=include_self,
+            word_boundary_leniency=word_boundary_leniency,
+            multi_variant=multi_variant,
+            exclude=exclude,
+            use_cache=not no_cache,
         )
-    ) is not None
-    started = time.perf_counter()
-    results = word_search.find_rhymes(
-        text,
-        limit=fetch_limit,
-        pool=pool,
-        strictness=strictness,
-        anchor=anchor_val,
-        include_self=include_self,
-        word_boundary_leniency=word_boundary_leniency,
-        multi_variant=multi_variant,
-        exclude=exclusions,
-        use_cache=use_cache,
-    )
-    elapsed = time.perf_counter() - started
-    if min_similarity > 0.0:
-        results = [r for r in results if r.similarity >= min_similarity]
-
-    if theme_terms:
-        vecs = _ensure_vectors_or_exit()
-        results = theme_service.apply_theme(
-            results, theme_terms, vecs, weight=theme_weight, min_theme=min_theme
+    except NauticalError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    results = response.candidates
+    theme_terms = response.context_terms
+    elapsed = response.elapsed_ms / 1000.0
+    cached = response.cached
+    if seed and not as_json:
+        seed_terms = theme_service.parse_terms(seed)
+        neighbors = [term for term in theme_terms if term not in seed_terms]
+        console.print(
+            f"[dim]seed context ({', '.join(seed_terms)}): "
+            f"{', '.join(neighbors) if neighbors else 'no neighbors'}[/dim]"
         )
-    results = results[:limit]
 
     if as_json:
         typer.echo(
@@ -668,47 +658,51 @@ def _rhymes_multiword(
     strictness: float,
     anchor: float,
     min_similarity: float,
-    theme_terms: list[str],
+    theme: str | None,
+    seed: str | None,
+    seed_limit: int,
     theme_weight: float,
     min_theme: float | None,
     show_align: bool,
     word_boundary_leniency: bool = True,
-    exclusions: frozenset[str] | None = None,
+    exclude: str | None = None,
     use_cache: bool = True,
     as_json: bool = False,
 ) -> None:
-    exclusions = exclusions or frozenset()
-    fetch_limit = max(limit, 100) if theme_terms else limit
-    cached = use_cache and cache_service.cache_get(
-        multiword_search.multiword_cache_key(
-            text, fetch_limit, beam, pool, max_words, min_words, strictness, anchor,
-            word_boundary_leniency, exclusions,
+    try:
+        response = engine.rhymes_multiword(
+            text,
+            limit=limit,
+            pool=pool,
+            beam_width=beam,
+            max_words=max_words,
+            min_words=min_words,
+            strictness=strictness,
+            anchor=anchor,
+            min_similarity=min_similarity,
+            theme=theme,
+            seed=seed,
+            seed_limit=seed_limit,
+            theme_weight=theme_weight,
+            min_theme=min_theme,
+            word_boundary_leniency=word_boundary_leniency,
+            exclude=exclude,
+            use_cache=use_cache,
         )
-    ) is not None
-    started = time.perf_counter()
-    results = multiword_search.find_multiword(
-        text,
-        limit=fetch_limit,
-        beam_width=beam,
-        cand_per_pos=pool,
-        max_words=max_words,
-        min_words=min_words,
-        strictness=strictness,
-        anchor=anchor,
-        word_boundary_leniency=word_boundary_leniency,
-        exclude=exclusions,
-        use_cache=use_cache,
-    )
-    elapsed = time.perf_counter() - started
-    if min_similarity > 0.0:
-        results = [r for r in results if r.similarity >= min_similarity]
-
-    if theme_terms:
-        vecs = _ensure_vectors_or_exit()
-        results = theme_service.apply_theme(
-            results, theme_terms, vecs, weight=theme_weight, min_theme=min_theme
+    except NauticalError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    results = response.candidates
+    theme_terms = response.context_terms
+    elapsed = response.elapsed_ms / 1000.0
+    cached = response.cached
+    if seed and not as_json:
+        seed_terms = theme_service.parse_terms(seed)
+        neighbors = [term for term in theme_terms if term not in seed_terms]
+        console.print(
+            f"[dim]seed context ({', '.join(seed_terms)}): "
+            f"{', '.join(neighbors) if neighbors else 'no neighbors'}[/dim]"
         )
-    results = results[:limit]
 
     if as_json:
         typer.echo(
@@ -804,24 +798,16 @@ def chain(
         console.print("[yellow]Provide at least one seed word.[/yellow]")
         raise typer.Exit(code=1)
 
-    vecs = _ensure_vectors_or_exit()
-    seed_vec = vecs.term_vector(seeds)
-    if seed_vec is None:
+    try:
+        neighbors = engine.chain(seeds, limit=limit)
+    except NauticalError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    if not neighbors:
         console.print(
-            f"[yellow]None of the seed(s) are in the vocabulary:[/yellow] "
+            f"[yellow]No related words found, or seeds are not in the vocabulary:[/yellow] "
             f"{', '.join(seeds)}"
         )
-        raise typer.Exit(code=1)
-
-    # Full-vocab vectors resolve any seed, but chain suggestions should stay
-    # within our lexicon; mask neighbors to real lexicon words.
-    try:
-        allowed = vectors_service.lexicon_words()
-    except vectors_service.VectorsUnavailable:
-        allowed = None
-    neighbors = vecs.most_similar(
-        seed_vec, topn=limit, exclude=set(seeds), allowed=allowed
-    )
 
     if as_json:
         typer.echo(
@@ -839,10 +825,6 @@ def chain(
         )
         return
 
-    if not neighbors:
-        console.print(f"[yellow]No related words found for[/yellow] {seeds}.")
-        return
-
     table = Table(title=f"Semantic chain: {', '.join(seeds)}")
     table.add_column("#", justify="right", style="dim")
     table.add_column("Word", style="cyan")
@@ -855,7 +837,7 @@ def chain(
 @app.command("eval")
 def eval_cmd(
     pairs_path: str = typer.Option(
-        None, "--pairs", help="Corpus JSON (default: docs/eval_pairs.json)."
+        None, "--pairs", help="Corpus JSON (default: packaged eval_pairs.json)."
     ),
     limit: int = typer.Option(50, "--limit", help="Rank window: hit if within top-N."),
     no_cache: bool = typer.Option(
@@ -865,24 +847,20 @@ def eval_cmd(
 ) -> None:
     """Replay the curated corpus and report rediscovery rank + MRR/hit-rate."""
     path = Path(pairs_path) if pairs_path else eval_service.DEFAULT_PAIRS_PATH
+    started = time.perf_counter()
     try:
-        pairs = eval_service.load_pairs(path)
+        report = engine.evaluate(
+            pairs_path=pairs_path, limit=limit, use_cache=not no_cache
+        )
     except FileNotFoundError:
         console.print(f"[red]Corpus not found:[/red] {path}")
         raise typer.Exit(code=1)
-    if not pairs:
+    except NauticalError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+    if not report.rows:
         console.print(f"[yellow]No pairs in corpus:[/yellow] {path}")
         raise typer.Exit(code=1)
-
-    # Load vectors once only if some pair asks for a theme rerank.
-    vectors = None
-    if any(p.get("theme") for p in pairs):
-        vectors = _ensure_vectors_or_exit()
-
-    started = time.perf_counter()
-    report = eval_service.run_eval(
-        pairs, limit=limit, use_cache=not no_cache, vectors=vectors
-    )
     elapsed = time.perf_counter() - started
 
     if as_json:

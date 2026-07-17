@@ -4,9 +4,8 @@ Replays a curated corpus of known lyric pairs through the search engine and
 reports whether each expected match is rediscovered and at what rank. This makes
 the calibration debts in ``docs/NOTES.md`` measurable rather than anecdotal.
 
-The corpus (``docs/eval_pairs.json``) is hand-verified ground truth; see that
-file's header for scope (English, in-scope; EN-JP echoes and transformation puns
-excluded).
+The packaged ``nautical.resources/eval_pairs.json`` corpus is hand-verified
+ground truth. Callers may supply a custom JSON path.
 """
 
 from __future__ import annotations
@@ -16,13 +15,13 @@ import re
 import sqlite3
 import statistics
 from dataclasses import dataclass, field
+from importlib.resources import files
 from pathlib import Path
 
-from .config import PROJECT_ROOT
 from .search import decoder as multiword_search
 from .search import words as word_search
 
-DEFAULT_PAIRS_PATH = PROJECT_ROOT / "docs" / "eval_pairs.json"
+DEFAULT_PAIRS_PATH = files("nautical.resources").joinpath("eval_pairs.json")
 
 
 def _normalize(text: str) -> str:
@@ -95,8 +94,8 @@ class EvalReport:
 
 def load_pairs(path: Path | None = None) -> list[dict]:
     """Load the pair list from a corpus JSON file (keys starting with '_' skipped)."""
-    path = Path(path) if path is not None else DEFAULT_PAIRS_PATH
-    data = json.loads(path.read_text(encoding="utf-8"))
+    source = Path(path) if path is not None else DEFAULT_PAIRS_PATH
+    data = json.loads(source.read_text(encoding="utf-8"))
     if isinstance(data, dict):
         return list(data.get("pairs", []))
     return list(data)
@@ -116,6 +115,8 @@ def evaluate_pair(
     use_cache: bool = True,
     conn: sqlite3.Connection | None = None,
     vectors=None,
+    db_path: Path | None = None,
+    cache_db_path: Path | None = None,
 ) -> EvalRow:
     """Run one pair through the engine and locate the expected match's rank."""
     query = pair["query"]
@@ -134,6 +135,8 @@ def evaluate_pair(
             limit=fetch_limit,
             anchor=anchor,
             use_cache=use_cache,
+            db_path=db_path,
+            cache_db_path=cache_db_path,
             conn=conn,
         )
         match_attr = "phrase"
@@ -144,6 +147,8 @@ def evaluate_pair(
             limit=fetch_limit,
             anchor=anchor,
             use_cache=use_cache,
+            db_path=db_path,
+            cache_db_path=cache_db_path,
             conn=conn,
         )
         match_attr = "word"
@@ -189,13 +194,21 @@ def run_eval(
     use_cache: bool = True,
     conn: sqlite3.Connection | None = None,
     vectors=None,
+    db_path: Path | None = None,
+    cache_db_path: Path | None = None,
 ) -> EvalReport:
     """Evaluate every pair and return per-pair rows plus aggregates."""
     report = EvalReport(limit=limit)
     for pair in pairs:
         report.rows.append(
             evaluate_pair(
-                pair, limit=limit, use_cache=use_cache, conn=conn, vectors=vectors
+                pair,
+                limit=limit,
+                use_cache=use_cache,
+                conn=conn,
+                vectors=vectors,
+                db_path=db_path,
+                cache_db_path=cache_db_path,
             )
         )
     return report

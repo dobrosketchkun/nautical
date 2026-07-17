@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 from .. import cache as cache_service
 from ..config import DB_PATH
@@ -247,6 +248,8 @@ def find_multiword(
     word_boundary_leniency: bool = True,
     exclude: frozenset[str] | None = None,
     use_cache: bool = True,
+    db_path: Path | None = None,
+    cache_db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> list[MultiwordResult]:
     """Return ranked multi-word sequences that sound like ``text``.
@@ -269,13 +272,13 @@ def find_multiword(
             text, limit, beam_width, cand_per_pos, max_words, min_words,
             strictness, anchor, word_boundary_leniency, exclude,
         )
-        cached = cache_service.cache_get(cache_key)
+        cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
             return [_result_from_dict(d) for d in cached]
 
     own_conn = conn is None
     if own_conn:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(Path(db_path) if db_path is not None else DB_PATH)
     try:
         target = enriched_segments(text, conn=conn)
         n = len(target)
@@ -396,5 +399,7 @@ def find_multiword(
     ]
 
     if cache_key is not None:
-        cache_service.cache_put(cache_key, [_result_to_dict(r) for r in results])
+        cache_service.cache_put(
+            cache_key, [_result_to_dict(r) for r in results], db_path=cache_db_path
+        )
     return results

@@ -1,0 +1,65 @@
+{
+  "_comment": "Curated ground-truth pairs for the Nautical evaluation harness. Every entry is hand-verified from docs/some_lyrics.txt.",
+  "_excluded": "Out of scope for Step One: English-Japanese echoes and word-transformation puns.",
+  "pairs": [
+    {
+      "query": "not a cult",
+      "expected": "nautical",
+      "mode": "single",
+      "anchor": "full",
+      "note": "Headline boundary-crossing oronym."
+    },
+    {
+      "query": "not a cult",
+      "expected": "nautical",
+      "mode": "single",
+      "anchor": "full",
+      "theme": "ocean, sea, ship",
+      "note": "Same oronym with nautical context."
+    },
+    {
+      "query": "clean and stainless",
+      "expected": "brainless",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "stainless",
+      "expected": "brainless",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "stainless",
+      "expected": "painless",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "invested",
+      "expected": "requested",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "emotion",
+      "expected": "devotion",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "nautical",
+      "expected": "not a cult",
+      "mode": "multiword",
+      "anchor": "full",
+      "note": "Known hard reverse-decode case."
+    },
+    {
+      "query": "clean and stainless",
+      "expected": "acting brainless",
+      "mode": "multiword",
+      "anchor": "full",
+      "note": "Known hard semantic multi-word case."
+    }
+  ]
+}

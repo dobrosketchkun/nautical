@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
+from .errors import NauticalError
+
 # ARPAbet phones are 1-2 uppercase letters with an optional stress digit.
 _PHONE_RE = re.compile(r"^[A-Z]{1,2}[0-9]?$")
 
@@ -20,16 +22,17 @@ def _get_g2p():
     try:
         from g2p_en import G2p
     except ImportError as exc:  # pragma: no cover - environment issue
-        raise RuntimeError(
-            "g2p_en is not installed. Install it into general_env_1 "
-            "(`pip install -e .`) to enable pronunciation of out-of-vocabulary words."
+        raise NauticalError(
+            "g2p_en is not installed. Reinstall Nautical with its runtime "
+            "dependencies to enable out-of-vocabulary pronunciation."
         ) from exc
     try:
         return G2p()
     except Exception as exc:  # pragma: no cover - first-run data download issue
-        raise RuntimeError(
+        raise NauticalError(
             "Could not initialize g2p_en (its nltk data may be missing and no "
-            "network is available for the one-time download)."
+            "network is available for the one-time setup). Install the NLTK "
+            "assets required by g2p_en and retry."
         ) from exc
 
 

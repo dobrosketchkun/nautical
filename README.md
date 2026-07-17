@@ -28,6 +28,7 @@ browser UI and word-transformation "puns" are deferred (see [Roadmap](#roadmap))
 - [Command reference](#command-reference)
 - [The dials (how to tune results)](#the-dials-how-to-tune-results)
 - [How it works](#how-it-works)
+- [Python library API](#python-library-api)
 - [Data & storage](#data--storage)
 - [Windows / conda note](#windows--conda-note)
 - [Testing](#testing)
@@ -67,8 +68,9 @@ browser UI and word-transformation "puns" are deferred (see [Roadmap](#roadmap))
 - **Python ≥ 3.10** (developed against the `general_env_1` conda environment).
 - Dependencies (installed automatically, see `pyproject.toml`):
   `cmudict`, `wordfreq`, `typer`, `rich`, `g2p_en`, `panphon`, `numpy`.
-- **~1 GB free disk** if you use the semantic layer (GloVe 6B download +
-  full-vocabulary cache). The core rhyme engine needs only a few tens of MB.
+- **~2 GB temporary free disk** while building semantic vectors; after a
+  successful build Nautical deletes the archive/raw text and retains only the
+  ~460 MB normalized matrix + vocabulary. The phonetic core is much smaller.
 - Network access **once** to download GloVe (only if you use `chain`/`--theme`).
   Everything else is offline.
 
@@ -76,13 +78,16 @@ browser UI and word-transformation "puns" are deferred (see [Roadmap](#roadmap))
 
 ## Installation
 
-From the project root (`d:\misc\pyhton\nautical`):
+From a cloned project:
 
 ```bash
 # Activate the environment (conda example)
 conda activate general_env_1
 
-# Editable install — exposes the `nautical` command
+# Normal local install — exposes the `nautical` command
+pip install .
+
+# Or, for development, keep imports linked to the checkout
 pip install -e .
 
 # One-time: build the lexicon (CMUdict + word frequencies) into SQLite
@@ -95,7 +100,7 @@ The semantic commands (`chain`, and `rhymes --theme`) need word vectors. They
 **auto-download and build on first use**, or you can pre-build them:
 
 ```bash
-# Downloads glove.6B.zip (~822 MB, one-time) and caches the full ~400K vocab
+# Downloads GloVe once; retains only matrix + vocab after a successful build
 nautical vectors build
 ```
 
@@ -168,7 +173,7 @@ The primary command. Single-word by default; add `--multiword` for the decoder.
 | `--align` | off | Print the phoneme alignment for each result. |
 | `--strict-boundaries` | off | Disable cheap word-final consonant deletion. |
 | `--primary-only` | off | Score only the query's primary pronunciation (skip variants). |
-| `--exclude "w1,w2"` | — | Drop these words; merged with `data/exclude.txt`. |
+| `--exclude "w1,w2"` | — | Drop these words; merged with `exclude.txt` in the resolved data directory. |
 | `--no-cache` | off | Bypass the query-result cache for this search. |
 | `--json` | off | Emit JSON instead of a table. |
 
@@ -220,7 +225,7 @@ nautical chain "ocean, sea"
 
 ### `nautical eval` — measure rediscovery quality
 
-Replays the curated corpus (`docs/eval_pairs.json`) and reports each pair's
+Replays the packaged curated corpus and reports each pair's
 rediscovery **rank**, plus **MRR**, **hit-rate**, and median rank. Useful when
 tuning phonetic weights.
 
@@ -252,7 +257,8 @@ nautical vectors build --force   # rebuild from the local raw file
 
 ### `nautical cache …` — manage the query cache
 
-Search results are cached in a separate `data/cache.db` keyed on the phonetic
+Search results are cached in a separate `cache.db` in the resolved data directory,
+keyed on the phonetic
 parameters (themes are applied *after* the cache, so one cached search serves
 every theme). Clear it after changing phonetic weights or rebuilding the lexicon.
 
@@ -289,7 +295,8 @@ Shows lexeme/pronunciation counts, DB size, schema version, and cache summary.
   every CMUdict pronunciation of the query and keeps the best per candidate
   (e.g. `read` = R IY D / R EH D).
 - **Exclusions**: hide specific words via `--exclude "w1,w2"` and/or by adding
-  lines to `data/exclude.txt` (one lowercase word per line, `#` comments). This
+  lines to `exclude.txt` in the resolved data directory (one lowercase word per
+  line, `#` comments). This
   is a *filter*, not a sound-collapse — distinct words that merely sound alike
   stay separate; you decide what to hide.
 
@@ -329,18 +336,63 @@ probability or a replacement for the separately reported similarity.
 
 ---
 
+## Python library API
+
+The supported embedding API is the `Nautical` client. An explicit data
+directory makes application instances isolated and reproducible:
+
+```python
+from nautical import Nautical
+
+engine = Nautical(data_dir="./nautical-data")
+engine.initialize()  # builds the phonetic lexicon if absent
+
+response = engine.rhymes("stainless", limit=10)
+for candidate in response.candidates:
+    print(candidate.word, candidate.rank_score, candidate.boundary_surprise)
+```
+
+Semantic methods build/download vectors only when requested:
+
+```python
+engine.build_vectors()
+response = engine.rhymes("emotion", seed="bank")
+neighbors = engine.chain("bank")
+```
+
+Expected setup failures raise subclasses of `NauticalError`; library calls do
+not raise Typer exits or print Rich tables. Existing low-level modules remain
+available for internal/advanced use, but `Nautical` and the result types exported
+from `nautical` are the supported public surface.
+
+---
+
 ## Data & storage
 
-All generated artifacts live under `data/` (gitignored, all rebuildable):
+Mutable artifacts never live inside an installed wheel. The data directory is
+resolved in this order:
 
-| Path | What | Rebuild with |
+1. `Nautical(data_dir=...)`
+2. `NAUTICAL_DATA_DIR`
+3. `<checkout>/data` when running from an editable/source checkout
+4. the platform user-data directory for a normal installation
+
+Typical normal-install defaults are `%LOCALAPPDATA%\nautical` on Windows,
+`~/.local/share/nautical` on Linux, and
+`~/Library/Application Support/nautical` on macOS. `nautical stats` prints the
+resolved directory.
+
+| Relative path | What | Rebuild with |
 |------|------|--------------|
-| `data/nautical.db` | Lexicon, pronunciations, phonetic indexes | `nautical db build` |
-| `data/cache.db` | Query-result cache | `nautical cache clear` (auto-rebuilds) |
-| `data/exclude.txt` | Your word exclusion list (hand-edited) | — |
-| `data/vectors/` | GloVe raw file + normalized `.npy` cache + vocab | `nautical vectors build` |
+| `nautical.db` | Lexicon, pronunciations, phonetic indexes | `nautical db build` |
+| `cache.db` | Query-result cache | `nautical cache clear` (auto-rebuilds) |
+| `exclude.txt` | Your word exclusion list (hand-edited) | — |
+| `vectors/glove.6B.300d.npy` | Normalized full-vocabulary matrix | `nautical vectors build` |
+| `vectors/glove.6B.300d.vocab.txt` | Matrix row vocabulary | `nautical vectors build` |
 
 Storage is SQLite (single-file, zero-setup). Similarity math runs in-process.
+The downloaded GloVe ZIP and extracted raw text are build inputs and are deleted
+after both runtime vector files are validated.
 
 ---
 
@@ -377,8 +429,9 @@ semantics, caching, and the evaluation harness.
 
 ```text
 src/nautical/
+  client.py            # supported embeddable Nautical API
   cli.py               # Typer CLI (all commands)
-  config.py            # paths & constants
+  config.py            # platform/editable data path resolution
   pronounce.py         # CMUdict + g2p → IPA, enriched segments/variants
   g2p.py               # grapheme→phoneme fallback
   exclude.py           # user exclusion list loader
@@ -399,6 +452,7 @@ src/nautical/
     vectors.py         # GloVe load/build (full vocabulary)
     theme.py           # theme reranking + seed parsing
   db/loader.py         # schema + ingest (CMUdict, wordfreq)
+  resources/           # packaged evaluation corpus
 
 docs/                  # PROJECT.MD, STEP_ONE.md, PHASES.md, NOTES.md, eval_pairs.json
 tests/                 # pytest suite

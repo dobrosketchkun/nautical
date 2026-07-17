@@ -21,7 +21,7 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 - [ ] **(P7) Weight set is untested against real examples.** The lyric weights
   (cheap unstressed/schwa/final-consonant edits, expensive stressed-vowel
   mismatch) need validation against the annotated corpus, not just intuition.
-  Now *measurable*: `nautical eval` replays `docs/eval_pairs.json` and reports
+  Now *measurable*: `nautical eval` replays the packaged evaluation corpus and reports
   per-pair rank + MRR/hit-rate, so weight changes can be judged by whether ranks
   improve. Calibration itself is still open (not done in P7).
 
@@ -122,6 +122,20 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 
 ## Decisions
 
+- **(P10) Wheel-safe paths and public client.** `NauticalPaths` resolves mutable
+  artifacts by explicit constructor path, `NAUTICAL_DATA_DIR`, detected source
+  checkout, then the platform user-data directory. The supported embedding
+  surface is `Nautical(data_dir=...)`; the CLI uses the same client. Default
+  path aliases remain for low-level backward compatibility, while client
+  instances pass DB/cache/vector/exclusion paths explicitly.
+- **(P10) Runtime vector storage is two files.** A successful vector build keeps
+  only `glove.6B.300d.npy` and `glove.6B.300d.vocab.txt`. The ~822 MB archive and
+  extracted raw 300d text are deleted after both runtime artifacts exist.
+  `--force` downloads build inputs again. The misleading historical
+  `.filtered.npy` cache is migrated to the new full-vocabulary filename.
+- **(P10) Read-only assets are package resources.** SQLite schema SQL and the
+  default evaluation corpus ship in the wheel through `importlib.resources`;
+  mutable databases, cache, exclusions, and vectors do not.
 - **(P9) Shared score contract and explicit ordering key.** Single-word and
   multi-word results now carry `ScoreComponents`: phonetic/full/tail,
   stress, optional naturalness, boundary surprise, optional theme fit,
@@ -164,8 +178,9 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   `ctx` optional. The shim is a safe no-op once typer/click agree and keeps
   `--help` working even in environments that can't be upgraded (it is what kept
   the CLI usable while the env still had typer 0.15.2).
-- **(P7) Eval corpus is curated ground truth, not scraped.** `docs/eval_pairs.json`
-  is hand-verified from `docs/some_lyrics.txt` (web lyric pages were too
+- **(P7/P10) Eval corpus is curated ground truth, not scraped.** The packaged
+  `nautical.resources/eval_pairs.json` is hand-verified from
+  `docs/some_lyrics.txt` (web lyric pages were too
   unreliable to auto-seed). It is user-extensible: add hand-verified pairs and
   re-run `nautical eval`. EN-JP echoes and transformation puns (`pun-stoppable`,
   `Ina-terested`, `Ina-sanity`) are deliberately excluded (out of scope for Step
@@ -184,18 +199,19 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   signal among otherwise exact tail matches. This is recorded rather than tuned
   here because calibration is explicitly outside Phase 9.
 
-- **(P6/P8) GloVe 6B 300d, auto-downloaded on first use, full vocabulary.** The
+- **(P6/P8/P10) GloVe 6B 300d, auto-downloaded on first use, full vocabulary.** The
   semantic layer uses GloVe 6B (300d). `semantics/vectors.py:ensure_vectors()`
   lazily downloads `glove.6B.zip` (~822 MB, one-time) if no cache/raw file is
   present, L2-normalizes, and caches a `float32` `.npy` plus a `vocab.txt` under
-  the gitignored `data/vectors/`. Offline after that. **P8 change:** vectors are
+  the resolved vectors directory. The archive/raw text are removed after a
+  successful build; runtime is offline after that. **P8 change:** vectors are
   no longer filtered to the lexicon - the full ~400K vocabulary is kept (npy
   ~458 MB, vocab ~4.5 MB) so any theme/seed word resolves; `chain` masks its
   suggestions back to the lexicon via `most_similar(allowed=...)`. A pre-staged
   raw file or cache skips the download. Primary mirror is Stanford, fallback is
   HuggingFace (`config.GLOVE_ZIP_URLS`).
-- **(P6) Theme fit is a separate signal.** `--theme` reranks by a bounded blend
-  `(1-w)*similarity + w*(theme_fit+1)/2` (default `--theme-weight 0.5`) but shows
+- **(P6/P9) Theme fit is a separate signal.** `--theme` reranks by a bounded blend
+  `(1-w)*base_score + w*(theme_fit+1)/2` (default `--theme-weight 0.5`) but shows
   `theme_fit` (cosine, `[-1,1]`) as its own column/JSON field - the phonetic and
   semantic scores are never merged into one opaque number. When `--theme` is set,
   a wider phonetic window is fetched before reranking so off-top but on-theme

@@ -189,6 +189,39 @@ and broad bridge search across every term in a semantic chain.
 
 ---
 
+## Phase 10 — Installable CLI and Python library
+
+**Goal:** preserve the source-checkout CLI while making a normal wheel safe to
+install and Nautical straightforward to embed.
+
+* `Nautical(data_dir=...)` is the supported public facade for setup,
+  pronunciation, distance, rhyme search, semantic chains, and evaluation.
+* Mutable artifacts resolve through explicit path → `NAUTICAL_DATA_DIR` →
+  source-checkout `data/` → platform user-data directory.
+* Normal installations never write to `site-packages`.
+* CLI commands call the same client methods as Python consumers.
+* SQLite/cache/vector/exclusion paths are instance-specific.
+* The schema and evaluation corpus are packaged resources.
+* Vector builds retain only the normalized `.npy` matrix and vocabulary;
+  the downloaded ZIP and raw GloVe text are deleted after validation.
+* Direct runtime dependencies are declared and wheel installation is tested.
+
+**Checks:**
+```text
+pip install .
+nautical db build
+nautical stats
+  → prints a writable platform data directory outside site-packages
+
+from nautical import Nautical
+engine = Nautical("./isolated-data")
+engine.initialize()
+engine.rhymes("stainless")
+  → returns typed candidates without CLI output or global path leakage
+```
+
+---
+
 ## Suggested grouping
 
 If we want fewer, larger checkpoints:
@@ -197,5 +230,6 @@ If we want fewer, larger checkpoints:
 * **Search:** Phases 3–5 (single-word, decoder, anchoring). ← the heart of step one.
 * **Context & proof:** Phases 6–7 (semantics, evaluation).
 * **Consistency:** Phases 8–9 (lyric correctness, coherent ranking, connected context).
+* **Distribution:** Phase 10 (wheel-safe paths, public client, packaged resources).
 
 We can stop and reassess after any phase.

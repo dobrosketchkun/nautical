@@ -4,8 +4,8 @@ Words listed here (or passed via ``--exclude``) are dropped from search results.
 This is deliberately a *filter*, not a sound-collapse: distinct words that merely
 sound alike (``cull`` / ``gnaw``) stay separate, and the user decides what to hide.
 
-Format of ``data/exclude.txt``: one lowercase word per line; blank lines and
-``#`` comments are ignored.
+Format of ``exclude.txt`` in the resolved data directory: one lowercase word
+per line; blank lines and ``#`` comments are ignored.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """SQLite-backed result cache for expensive searches.
 
-Lives in its own ``data/cache.db`` (separate from the lexicon ``nautical.db``)
-so it survives a lexicon rebuild and needs no schema-version bump. Values are
+Lives in its own ``cache.db`` under the resolved data directory (separate from
+the lexicon), so it survives a lexicon rebuild. Values are
 opaque JSON payloads; each caller serializes/deserializes its own result type.
 The cache key is derived from the phonetic search parameters only - semantic
 reranking (``--theme``) is applied after the cache, so one cached search serves

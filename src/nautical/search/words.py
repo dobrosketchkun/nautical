@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
+from pathlib import Path
 
 from .. import cache as cache_service
 from ..config import DB_PATH
@@ -121,6 +122,8 @@ def find_rhymes(
     multi_variant: bool = True,
     exclude: frozenset[str] | None = None,
     use_cache: bool = True,
+    db_path: Path | None = None,
+    cache_db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
 ) -> list[RhymeResult]:
     """Return ranked single-word sound-alikes for ``text``.
@@ -144,13 +147,13 @@ def find_rhymes(
             text, limit, pool, strictness, anchor, include_self,
             word_boundary_leniency, multi_variant, exclude,
         )
-        cached = cache_service.cache_get(cache_key)
+        cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
             return [_result_from_dict(d) for d in cached]
 
     own_conn = conn is None
     if own_conn:
-        conn = sqlite3.connect(DB_PATH)
+        conn = sqlite3.connect(Path(db_path) if db_path is not None else DB_PATH)
     try:
         if multi_variant:
             target_variants = enriched_segment_variants(text, conn=conn)
@@ -234,5 +237,7 @@ def find_rhymes(
     )[:limit]
 
     if cache_key is not None:
-        cache_service.cache_put(cache_key, [_result_to_dict(r) for r in results])
+        cache_service.cache_put(
+            cache_key, [_result_to_dict(r) for r in results], db_path=cache_db_path
+        )
     return results

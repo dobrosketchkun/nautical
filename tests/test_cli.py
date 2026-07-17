@@ -5,6 +5,7 @@ import json
 from typer.testing import CliRunner
 
 from nautical import cli
+from nautical.client import SearchResponse
 from nautical.phonetics.align import Alignment
 from nautical.search.ranking import ScoreComponents
 from nautical.search.words import RhymeResult
@@ -42,27 +43,23 @@ def test_rhymes_help_exposes_seed_workflow():
 def test_seed_expansion_and_json_score_contract(monkeypatch):
     seen = {}
 
-    monkeypatch.setattr(cli, "_ensure_vectors_or_exit", lambda: object())
-    monkeypatch.setattr(cli.vectors_service, "lexicon_words", lambda: {"bank", "money"})
-    monkeypatch.setattr(
-        cli.theme_service,
-        "expand_seed_terms",
-        lambda seeds, vectors, limit, allowed: ["bank", "money"],
-    )
-    monkeypatch.setattr(cli.word_search, "find_rhymes", lambda *args, **kwargs: [_result()])
+    def fake_rhymes(text, **kwargs):
+        seen.update(kwargs)
+        return SearchResponse(
+            candidates=[_result()],
+            mode="single",
+            context_terms=["bank", "money"],
+        )
 
-    def fake_apply_theme(results, terms, vectors, weight, min_theme):
-        seen["terms"] = terms
-        return results
-
-    monkeypatch.setattr(cli.theme_service, "apply_theme", fake_apply_theme)
+    monkeypatch.setattr(cli.engine, "rhymes", fake_rhymes)
 
     result = runner.invoke(
         cli.app,
         ["rhymes", "stainless", "--seed", "bank", "--seed-limit", "1", "--json", "--no-cache"],
     )
     assert result.exit_code == 0, result.stdout
-    assert seen["terms"] == ["bank", "money"]
+    assert seen["seed"] == "bank"
+    assert seen["seed_limit"] == 1
     payload = json.loads(result.stdout)
     assert payload[0]["rank_score"] == 1.025
     assert payload[0]["boundary_surprise"] == 0.25
