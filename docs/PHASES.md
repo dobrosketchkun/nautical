@@ -135,6 +135,60 @@ nautical chain "bank"                                     → financial word poo
 
 ---
 
+## Phase 8 — Boundary leniency, variants, and exclusions
+
+**Goal:** improve lyric-facing correctness and make noisy result families
+controllable.
+
+* Word-final consonant leniency across phrase boundaries.
+* Multi-pronunciation scoring for query text.
+* User-managed persistent and per-query exclusions.
+* Full-vocabulary semantic vectors and Windows/Unicode robustness.
+
+**Check:** alternate pronunciations match correctly, strict boundaries remain
+available, and excluded words disappear before result limits are applied.
+
+---
+
+## Phase 9 — Coherent ranking and connected context
+
+**Goal:** make every displayed signal participate consistently in an
+explainable rank, measure resegmentation, and connect semantic expansion to
+rhyme discovery without removing standalone exploration.
+
+* Shared score components for single- and multi-word results:
+  phonetic/full/tail, stress, naturalness where applicable, boundary surprise,
+  theme fit, base score, and explicit final `rank_score`.
+* Stress and boundary surprise contribute to the provisional base rank.
+* Theme reranking blends with the complete base score, preserving multi-word
+  naturalness and word-count costs.
+* Boundary surprise compares internal word-boundary positions after global
+  phoneme alignment.
+* `nautical chain SEED` remains standalone.
+* `nautical rhymes TEXT --seed SEED` expands a bounded semantic neighborhood
+  and uses it as ranking context.
+* JSON includes structured alignments and all score components.
+
+**Checks:**
+```text
+nautical rhymes "not a cult" --anchor full
+  → boundary surprise is high for "nautical"; Rank is the visible sort key
+
+nautical rhymes "nautical" --multiword
+  → Stress, Bound, Nat, and Rank are present; global alignment is in JSON
+
+nautical chain "bank"
+  → standalone finance neighborhood remains available
+
+nautical rhymes "emotion" --seed "bank"
+  → expanded finance context participates in reranking
+```
+
+**Deferred:** calibration of Phase 9 weights against a larger judged corpus,
+and broad bridge search across every term in a semantic chain.
+
+---
+
 ## Suggested grouping
 
 If we want fewer, larger checkpoints:
@@ -142,5 +196,6 @@ If we want fewer, larger checkpoints:
 * **Foundation:** Phases 0–2 (data, pronunciation, distance).
 * **Search:** Phases 3–5 (single-word, decoder, anchoring). ← the heart of step one.
 * **Context & proof:** Phases 6–7 (semantics, evaluation).
+* **Consistency:** Phases 8–9 (lyric correctness, coherent ranking, connected context).
 
 We can stop and reassess after any phase.

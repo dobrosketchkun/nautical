@@ -45,7 +45,7 @@ def _log(message: str) -> None:
         print(message)
 
 
-def _lexicon_words(db_path: Path | None = None) -> set[str]:
+def lexicon_words(db_path: Path | None = None) -> set[str]:
     """Return the set of lowercase written forms from the lexicon."""
     db_path = Path(db_path) if db_path is not None else DB_PATH
     if not db_path.exists():
@@ -58,6 +58,10 @@ def _lexicon_words(db_path: Path | None = None) -> set[str]:
     finally:
         conn.close()
     return {form.lower() for (form,) in rows if form}
+
+
+# Backwards-compatible alias for existing callers/tests.
+_lexicon_words = lexicon_words
 
 
 def download_glove(dest: Path | None = None) -> Path:

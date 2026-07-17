@@ -114,11 +114,35 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   went 74.6s -> 61 ms cold->warm. The underlying per-query cost is unchanged (a
   candidate-prefilter is still a future win); caching just removes the repeat
   penalty, which is what the CLI/harness workflow hits most.
-- [ ] **(P4) Decoder ranking blend uncalibrated.** `_W_NATURALNESS=0.35`,
-  `_W_WORDS=0.05` in `search/decoder.py` are first-pass constants; calibrate in
-  Phase 7 against `some_lyrics.txt`.
+- [ ] **(P4/P9) Ranking weights uncalibrated.** Phase 9 centralizes the
+  provisional stress (`0.10`), boundary (`0.10`), naturalness (`0.35`), and
+  per-word penalty (`0.05`) in `search/ranking.py`. The signals now compose
+  consistently, but the constants still need calibration against a larger
+  judged corpus.
 
 ## Decisions
+
+- **(P9) Shared score contract and explicit ordering key.** Single-word and
+  multi-word results now carry `ScoreComponents`: phonetic/full/tail,
+  stress, optional naturalness, boundary surprise, optional theme fit,
+  `base_score`, and `rank_score`. CLI tables and JSON expose `rank_score` as the
+  actual ordering key. `theme.apply_theme` blends context with the complete
+  base score instead of raw similarity, so multi-word naturalness and the other
+  Phase 9 signals are retained.
+- **(P9) Boundary surprise is alignment-aware.** Internal boundaries are taken
+  from `Seg.word_final` in global aligned-column space; the unavoidable final
+  sequence boundary is ignored. Surprise is Jaccard distance between source and
+  candidate boundary sets (`0` same segmentation, `1` wholly different).
+  Multi-word results now retain a global alignment in addition to per-word
+  decoder chunks.
+- **(P9) Semantic chains remain standalone and gain a connected mode.**
+  `nautical chain SEED` still lists neighbors. `nautical rhymes TEXT --seed
+  SEED` expands a bounded lexicon neighborhood (`--seed-limit`) and combines it
+  with any explicit `--theme` terms for context reranking. Broad phonetic bridge
+  search across every chain member remains deferred.
+- **(P9) Cache payload version.** `cache.make_key` includes a Phase 9 format
+  version so pre-Phase-9 payloads without score components/global alignments
+  are ignored automatically; semantic context remains post-cache.
 
 - **(P7) Result caching: separate `cache.db`, phonetic-only key, theme after.**
   `src/nautical/cache.py` writes to its own `data/cache.db` (not `nautical.db`),
@@ -153,6 +177,12 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   reverse multi-word decodes (`nautical -> not a cult`,
   `clean and stainless -> acting brainless`) are misses, the known Phase 4/6
   semantic gap, reported honestly rather than hidden. (P7 baseline was MRR 0.383.)
+  **P9 structural-ranking baseline** (no weight calibration): hit-rate@50 remains
+  7/9 (78%), MRR 0.394, median rank 2. `not a cult -> nautical` remains rank 6
+  and theme-reranks to rank 1; the same two multi-word cases remain misses.
+  `invested -> requested` moves from rank 4 to 22 because stress is now a real
+  signal among otherwise exact tail matches. This is recorded rather than tuned
+  here because calibration is explicitly outside Phase 9.
 
 - **(P6/P8) GloVe 6B 300d, auto-downloaded on first use, full vocabulary.** The
   semantic layer uses GloVe 6B (300d). `semantics/vectors.py:ensure_vectors()`
@@ -181,9 +211,9 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 
 ## Phase 6 limitations / deferrals
 
-- [ ] **(P7) Theme-blend weight is uncalibrated.** `--theme-weight` default 0.5
-  and the bounded blend in `semantics/theme.py:apply_theme` are first-pass; tune
-  against `some_lyrics.txt` verses in Phase 7.
+- [ ] **(P7/P9) Theme-blend weight is uncalibrated.** `--theme-weight` default
+  0.5 remains first-pass. Phase 9 fixes its input (complete `base_score`, not raw
+  similarity), but tuning is deferred.
 - [x] **(P6/P8) Theme/seed words limited to the lexicon-filtered vocab.
   RESOLVED (P8).** `build_vectors` no longer filters to the lexicon - it keeps all
   ~400K GloVe vectors (npy ~112 MB -> ~458 MB, vocab ~4.5 MB), so any theme/seed

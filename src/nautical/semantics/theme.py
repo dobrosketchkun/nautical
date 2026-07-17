@@ -3,8 +3,8 @@
 Given a set of theme terms (e.g. ``"ocean, sea, ship"``) we build a single
 theme vector and score each candidate's semantic fit against it. The fit is kept
 as a separate, decomposed signal (``theme_fit`` in ``[-1, 1]``) and blended with
-the phonetic ``similarity`` only for ranking; the two numbers are never merged
-into one opaque score in the output.
+the candidate's complete base score only for ranking; every component and the
+final rank score remain visible.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ from typing import Sequence, TypeVar
 
 import numpy as np
 
+from ..search.ranking import apply_context_score
 from .vectors import Vectors
 
 T = TypeVar("T")
@@ -43,6 +44,30 @@ def _result_words(result: object) -> list[str]:
     return [word] if word else []
 
 
+def expand_seed_terms(
+    seeds: list[str],
+    vectors: Vectors,
+    *,
+    limit: int = 25,
+    allowed: set[str] | None = None,
+) -> list[str]:
+    """Expand semantic seeds into a bounded context-term list.
+
+    The original seeds are retained first. Neighbor expansion is the connected
+    counterpart to the standalone ``chain`` command.
+    """
+    seed_vec = vectors.term_vector(seeds)
+    if seed_vec is None:
+        return []
+    neighbors = vectors.most_similar(
+        seed_vec,
+        topn=max(0, limit),
+        exclude=set(seeds),
+        allowed=allowed,
+    )
+    return [*seeds, *(word for word, _ in neighbors)]
+
+
 def apply_theme(
     results: list[T],
     theme_terms: list[str],
@@ -52,9 +77,9 @@ def apply_theme(
 ) -> list[T]:
     """Set ``theme_fit`` on each result and re-rank by a phonetic/theme blend.
 
-    ``rank = (1 - weight) * similarity + weight * (theme_fit + 1) / 2``. Results
-    whose ``theme_fit`` is below ``min_theme`` (when given) are dropped. Results
-    with no resolvable words get ``theme_fit = 0.0`` and are ranked on phonetics.
+    Semantic context is blended with each candidate's complete ``base_score`` so
+    stress, boundary surprise, and multi-word naturalness remain represented.
+    Results whose ``theme_fit`` is below ``min_theme`` (when given) are dropped.
     """
     theme_vec = vectors.term_vector(theme_terms)
     if theme_vec is None:
@@ -64,14 +89,13 @@ def apply_theme(
     for result in results:
         phrase_vec = _phrase_vector(_result_words(result), vectors)
         fit = float(np.dot(phrase_vec, theme_vec)) if phrase_vec is not None else 0.0
-        result.theme_fit = fit  # type: ignore[attr-defined]
+        result.scores.theme_fit = fit  # type: ignore[attr-defined]
+        result.scores.rank_score = apply_context_score(  # type: ignore[attr-defined]
+            result.scores.base_score, fit, weight  # type: ignore[attr-defined]
+        )
         if min_theme is not None and fit < min_theme:
             continue
         kept.append(result)
 
-    kept.sort(
-        key=lambda r: (1.0 - weight) * r.similarity  # type: ignore[attr-defined]
-        + weight * (r.theme_fit + 1.0) / 2.0,  # type: ignore[attr-defined]
-        reverse=True,
-    )
+    kept.sort(key=lambda r: r.scores.rank_score, reverse=True)  # type: ignore[attr-defined]
     return kept

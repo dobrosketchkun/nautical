@@ -58,6 +58,8 @@ class EvalRow:
     found: bool
     rank: int | None
     similarity: float | None
+    rank_score: float | None
+    boundary_surprise: float | None
     theme_fit: float | None
     note: str | None = None
 
@@ -154,6 +156,8 @@ def evaluate_pair(
 
     rank, hit = _rank_of(results, expected, match_attr)
     similarity = getattr(hit, "similarity", None) if hit is not None else None
+    rank_score = getattr(hit, "rank_score", None) if hit is not None else None
+    boundary = getattr(hit, "boundary_surprise", None) if hit is not None else None
     theme_fit = getattr(hit, "theme_fit", None) if hit is not None else None
     return EvalRow(
         query=query,
@@ -164,6 +168,8 @@ def evaluate_pair(
         found=rank is not None,
         rank=rank,
         similarity=similarity,
+        rank_score=rank_score,
+        boundary_surprise=boundary,
         theme_fit=theme_fit,
         note=pair.get("note"),
     )

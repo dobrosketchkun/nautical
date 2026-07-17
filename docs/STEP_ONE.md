@@ -75,6 +75,18 @@ Each candidate carries a **decomposed** score (never a single opaque number):
 * `boundary_surprise` — how much the word boundaries moved
 * `theme_fit` — semantic relevance to the surrounding verse (see §4)
 
+Phase 9 adds an explicit `rank_score`, the actual ordering key assembled from
+those named components. Stress and boundary surprise now affect ranking instead
+of being display-only signals. Multi-word naturalness remains part of the base
+score, and theme/seed context blends with that complete base rather than
+restarting from raw phonetic similarity.
+
+Boundary surprise is the Jaccard distance between internal word-boundary
+positions after phoneme alignment. The final sequence boundary is ignored:
+same segmentation scores `0`, while a complete resegmentation approaches `1`.
+Its current contribution, like the other Phase 9 weights, is provisional;
+weight calibration is explicitly deferred.
+
 Lyric-specific phonetic weights:
 
 * unstressed-vowel substitution → cheap
@@ -93,6 +105,13 @@ Two distinct features, both powered by the same offline word-vector file:
 
 1. **Theme-filtering of results** — rerank/filter rhyme candidates by how well they fit the theme of the current verse (a marine verse floats `nautical`, `barnacle`, `tentacle`).
 2. **Semantic chains ("the `bank` example")** — expand a seed word into a related pool (`bank` → `invested` → `interest` → `currency` → `dividend`) to then rhyme against.
+
+Both forms are available:
+
+* `nautical chain "bank"` keeps the semantic neighborhood disconnected for
+  open-ended browsing.
+* `nautical rhymes TEXT --seed "bank"` expands the same neighborhood and uses
+  it directly as context while ranking sound matches.
 
 ---
 
@@ -132,8 +151,8 @@ selection (word or phrase)
        single-word index               → word candidates
        phonetic decoder + freq          → multi-word candidates
   → score (phonetic / stress / naturalness / boundary_surprise)
-  → theme-rerank (GloVe, optional seed) 
-  → present ranked candidates + phoneme alignment (explanation)
+  → context-rerank (GloVe; explicit theme and/or expanded seed)
+  → present rank_score + components + phoneme alignment (explanation)
 ```
 
 Both anchoring modes (tail / full-span) run in the search step; the dial adjusts which results and weights dominate.

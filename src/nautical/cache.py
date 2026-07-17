@@ -18,6 +18,8 @@ from pathlib import Path
 
 from .config import CACHE_DB_PATH, ensure_data_dir
 
+_CACHE_FORMAT_VERSION = "phase9-v1"
+
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS query_cache (
     key        TEXT PRIMARY KEY,
@@ -41,7 +43,12 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 def make_key(kind: str, text: str, params: dict) -> str:
     """Stable cache key from a search kind, query text, and its parameters."""
     normalized = json.dumps(
-        {"kind": kind, "text": text.strip().lower(), "params": params},
+        {
+            "format": _CACHE_FORMAT_VERSION,
+            "kind": kind,
+            "text": text.strip().lower(),
+            "params": params,
+        },
         sort_keys=True,
         ensure_ascii=False,
     )

@@ -27,43 +27,63 @@ from ..phonetics.align import (
     alignment_from_dict,
     alignment_to_dict,
 )
-from ..phonetics.anchor import rhyme_tail, segs_from_stored
+from ..phonetics.anchor import boundary_surprise, rhyme_tail, segs_from_stored
 from ..phonetics.distance import _stress_similarity, _stress_string, score_segments
 from ..pronounce import enriched_segments, tokenize
 from .normalize import onset_keys
+from .ranking import ScoreComponents, rank_base
 
 _segs_from_row = segs_from_stored
-
-# Ranking blend (uncalibrated first pass; see docs/NOTES.md).
-_W_NATURALNESS = 0.35
-_W_WORDS = 0.05
-
 
 @dataclass
 class MultiwordResult:
     phrase: str
     words: list[str]
-    similarity: float
-    stress_similarity: float
-    naturalness: float
     num_words: int
     ipa: str
-    score: float
     chunks: list[tuple[str, Alignment]]
-    theme_fit: float | None = None
+    alignment: Alignment
+    scores: ScoreComponents
+
+    @property
+    def similarity(self) -> float:
+        return self.scores.phonetic_similarity
+
+    @property
+    def stress_similarity(self) -> float:
+        return self.scores.stress_similarity
+
+    @property
+    def naturalness(self) -> float:
+        return self.scores.naturalness or 0.0
+
+    @property
+    def boundary_surprise(self) -> float:
+        return self.scores.boundary_surprise
+
+    @property
+    def theme_fit(self) -> float | None:
+        return self.scores.theme_fit
+
+    @property
+    def rank_score(self) -> float:
+        return self.scores.rank_score
+
+    @property
+    def score(self) -> float:
+        """Backwards-compatible alias for the explicit rank score."""
+        return self.rank_score
 
 
 def _result_to_dict(r: MultiwordResult) -> dict:
     return {
         "phrase": r.phrase,
         "words": r.words,
-        "similarity": r.similarity,
-        "stress_similarity": r.stress_similarity,
-        "naturalness": r.naturalness,
         "num_words": r.num_words,
         "ipa": r.ipa,
-        "score": r.score,
         "chunks": [[w, alignment_to_dict(a)] for w, a in r.chunks],
+        "alignment": alignment_to_dict(r.alignment),
+        "scores": r.scores.to_dict(),
     }
 
 
@@ -71,13 +91,11 @@ def _result_from_dict(d: dict) -> MultiwordResult:
     return MultiwordResult(
         phrase=d["phrase"],
         words=d["words"],
-        similarity=d["similarity"],
-        stress_similarity=d["stress_similarity"],
-        naturalness=d["naturalness"],
         num_words=d["num_words"],
         ipa=d["ipa"],
-        score=d["score"],
         chunks=[(w, alignment_from_dict(a)) for w, a in d["chunks"]],
+        alignment=alignment_from_dict(d["alignment"]),
+        scores=ScoreComponents.from_dict(d["scores"]),
     )
 
 
@@ -268,8 +286,9 @@ def find_multiword(
         skip_words = {text.strip().lower()} | set(exclude)
 
         # nodes[n] holds completed tilings; there are combinatorially many, so it
-        # is capped (by cost) during the DP to bound memory. The final rerank is
-        # by score (cost + naturalness), so keep it comfortably larger than limit.
+        # is capped (by cost) during the DP to bound memory. Final ranking also
+        # uses stress, boundary surprise, naturalness, and word count, so keep
+        # this cost-ranked window comfortably larger than the requested limit.
         final_cap = max(beam_width, min(limit * 50, 100_000))
 
         transitions: list[list[_Transition]] = [[] for _ in range(n)]
@@ -332,27 +351,47 @@ def find_multiword(
                 similarity = (1.0 - anchor) * similarity + anchor * tail_similarity
             naturalness = sum(_freq_score(tr.frequency) for tr in steps) / len(steps)
             num_words = len(words)
-            score = similarity + _W_NATURALNESS * naturalness - _W_WORDS * num_words
             stress_similarity = _stress_similarity(_stress_string(segs), target_stress)
+            _, _, global_alignment = score_segments(
+                target,
+                segs,
+                strictness=strictness,
+                word_boundary_leniency=word_boundary_leniency,
+            )
+            surprise = boundary_surprise(global_alignment)
+            base_score = rank_base(
+                similarity,
+                stress_similarity,
+                surprise,
+                naturalness=naturalness,
+                num_words=num_words,
+            )
 
             existing = best_by_phrase.get(phrase)
-            if existing is None or score > existing.score:
+            if existing is None or base_score > existing.rank_score:
                 best_by_phrase[phrase] = MultiwordResult(
                     phrase=phrase,
                     words=words,
-                    similarity=similarity,
-                    stress_similarity=stress_similarity,
-                    naturalness=naturalness,
                     num_words=num_words,
                     ipa="".join(s.ipa for s in segs),
-                    score=score,
                     chunks=[(tr.word, tr.alignment) for tr in steps],
+                    alignment=global_alignment,
+                    scores=ScoreComponents(
+                        phonetic_similarity=similarity,
+                        full_similarity=similarity,
+                        tail_similarity=tail_similarity if anchor > 0.0 else similarity,
+                        stress_similarity=stress_similarity,
+                        naturalness=naturalness,
+                        boundary_surprise=surprise,
+                        base_score=base_score,
+                        rank_score=base_score,
+                    ),
                 )
     finally:
         if own_conn:
             conn.close()
 
-    results = sorted(best_by_phrase.values(), key=lambda r: r.score, reverse=True)[
+    results = sorted(best_by_phrase.values(), key=lambda r: r.rank_score, reverse=True)[
         :limit
     ]
 

@@ -385,6 +385,19 @@ def _ensure_vectors_or_exit() -> vectors_service.Vectors:
 _ALIGN_LEGEND = "[dim]align legend: = match  ~ substitute  + insert  x delete[/dim]"
 
 
+def _alignment_to_json(alignment) -> list[dict]:
+    """Return a stable structured representation of an alignment."""
+    return [
+        {
+            "src": pair.src.ipa if pair.src else None,
+            "tgt": pair.tgt.ipa if pair.tgt else None,
+            "op": pair.op,
+            "cost": round(pair.cost, 4),
+        }
+        for pair in alignment.pairs
+    ]
+
+
 def _result_summary(count: int, elapsed: float, cached: bool) -> str:
     tag = " [green](cached)[/green]" if cached else ""
     return f"[dim]{count} result(s) in {elapsed * 1000:.0f} ms{tag}[/dim]"
@@ -430,6 +443,17 @@ def rhymes(
         "--theme",
         help="Rerank by semantic fit to these terms, e.g. 'ocean, sea, ship'.",
     ),
+    seed: str = typer.Option(
+        None,
+        "--seed",
+        help="Expand semantic seed(s) into context terms, then rerank matches.",
+    ),
+    seed_limit: int = typer.Option(
+        25,
+        "--seed-limit",
+        min=0,
+        help="Number of lexicon neighbors used to expand --seed.",
+    ),
     theme_weight: float = typer.Option(
         0.5, "--theme-weight", min=0.0, max=1.0, help="Blend: 0 = phonetics, 1 = theme."
     ),
@@ -474,6 +498,30 @@ def rhymes(
 ) -> None:
     """Find single-word (or, with --multiword, multi-word) sound-alikes."""
     theme_terms = theme_service.parse_terms(theme) if theme else []
+    seed_terms = theme_service.parse_terms(seed) if seed else []
+    if seed_terms:
+        vecs = _ensure_vectors_or_exit()
+        try:
+            allowed = vectors_service.lexicon_words()
+        except vectors_service.VectorsUnavailable as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(code=1)
+        expanded = theme_service.expand_seed_terms(
+            seed_terms, vecs, limit=seed_limit, allowed=allowed
+        )
+        if not expanded:
+            console.print(
+                f"[yellow]None of the seed(s) are in the vector vocabulary:[/yellow] "
+                f"{', '.join(seed_terms)}"
+            )
+            raise typer.Exit(code=1)
+        theme_terms = list(dict.fromkeys([*theme_terms, *expanded]))
+        if not as_json:
+            neighbors = [term for term in expanded if term not in seed_terms]
+            console.print(
+                f"[dim]seed context ({', '.join(seed_terms)}): "
+                f"{', '.join(neighbors) if neighbors else 'no neighbors'}[/dim]"
+            )
     word_boundary_leniency = not strict_boundaries
     multi_variant = not primary_only
     exclusions = exclude_service.resolve_exclusions(exclude)
@@ -540,18 +588,22 @@ def rhymes(
                 [
                     {
                         "word": r.word,
+                        "rank_score": round(r.rank_score, 4),
                         "similarity": round(r.similarity, 4),
                         "full_similarity": round(r.full_similarity, 4),
                         "tail_similarity": round(r.tail_similarity, 4),
                         "stress_similarity": round(r.stress_similarity, 4),
+                        "boundary_surprise": round(r.boundary_surprise, 4),
                         "frequency": r.frequency,
                         "syllable_count": r.syllable_count,
                         "ipa": r.ipa,
+                        "alignment": _alignment_to_json(r.alignment),
                         **(
                             {"theme_fit": round(r.theme_fit, 4)}
                             if r.theme_fit is not None
                             else {}
                         ),
+                        **({"context_terms": theme_terms} if theme_terms else {}),
                     }
                     for r in results
                 ],
@@ -568,25 +620,33 @@ def rhymes(
     table = Table(title=f"Rhymes for: {text}")
     table.add_column("#", justify="right", style="dim")
     table.add_column("Word", style="cyan")
+    table.add_column("Rank", justify="right", style="magenta")
     table.add_column("Sim", justify="right", style="magenta")
     table.add_column("Full", justify="right")
     table.add_column("Tail", justify="right")
     if theme_terms:
         table.add_column("Theme", justify="right", style="green")
     table.add_column("Stress", justify="right")
+    table.add_column("Bound", justify="right")
     table.add_column("Syll", justify="right")
     table.add_column("IPA")
     for i, r in enumerate(results, start=1):
         row = [
             str(i),
             r.word,
+            f"{r.rank_score:.3f}",
             f"{r.similarity:.3f}",
             f"{r.full_similarity:.2f}",
             f"{r.tail_similarity:.2f}",
         ]
         if theme_terms:
             row.append(f"{r.theme_fit:+.2f}" if r.theme_fit is not None else "-")
-        row += [f"{r.stress_similarity:.2f}", str(r.syllable_count), r.ipa]
+        row += [
+            f"{r.stress_similarity:.2f}",
+            f"{r.boundary_surprise:.2f}",
+            str(r.syllable_count),
+            r.ipa,
+        ]
         table.add_row(*row)
     console.print(table)
     console.print(_result_summary(len(results), elapsed, cached))
@@ -657,17 +717,27 @@ def _rhymes_multiword(
                     {
                         "phrase": r.phrase,
                         "words": r.words,
-                        "score": round(r.score, 4),
+                        "rank_score": round(r.rank_score, 4),
                         "similarity": round(r.similarity, 4),
                         "stress_similarity": round(r.stress_similarity, 4),
                         "naturalness": round(r.naturalness, 4),
+                        "boundary_surprise": round(r.boundary_surprise, 4),
                         "num_words": r.num_words,
                         "ipa": r.ipa,
+                        "alignment": _alignment_to_json(r.alignment),
+                        "chunks": [
+                            {
+                                "word": word,
+                                "alignment": _alignment_to_json(alignment),
+                            }
+                            for word, alignment in r.chunks
+                        ],
                         **(
                             {"theme_fit": round(r.theme_fit, 4)}
                             if r.theme_fit is not None
                             else {}
                         ),
+                        **({"context_terms": theme_terms} if theme_terms else {}),
                     }
                     for r in results
                 ],
@@ -684,24 +754,31 @@ def _rhymes_multiword(
     table = Table(title=f"Multi-word sound-alikes for: {text}")
     table.add_column("#", justify="right", style="dim")
     table.add_column("Phrase", style="cyan")
-    table.add_column("Score", justify="right", style="magenta")
+    table.add_column("Rank", justify="right", style="magenta")
     table.add_column("Sim", justify="right")
     table.add_column("Nat", justify="right")
     if theme_terms:
         table.add_column("Theme", justify="right", style="green")
+    table.add_column("Stress", justify="right")
+    table.add_column("Bound", justify="right")
     table.add_column("Words", justify="right")
     table.add_column("IPA")
     for i, r in enumerate(results, start=1):
         row = [
             str(i),
             r.phrase,
-            f"{r.score:.3f}",
+            f"{r.rank_score:.3f}",
             f"{r.similarity:.3f}",
             f"{r.naturalness:.2f}",
         ]
         if theme_terms:
             row.append(f"{r.theme_fit:+.2f}" if r.theme_fit is not None else "-")
-        row += [str(r.num_words), r.ipa]
+        row += [
+            f"{r.stress_similarity:.2f}",
+            f"{r.boundary_surprise:.2f}",
+            str(r.num_words),
+            r.ipa,
+        ]
         table.add_row(*row)
     console.print(table)
     console.print(_result_summary(len(results), elapsed, cached))
@@ -739,7 +816,7 @@ def chain(
     # Full-vocab vectors resolve any seed, but chain suggestions should stay
     # within our lexicon; mask neighbors to real lexicon words.
     try:
-        allowed = vectors_service._lexicon_words()
+        allowed = vectors_service.lexicon_words()
     except vectors_service.VectorsUnavailable:
         allowed = None
     neighbors = vecs.most_similar(
@@ -830,6 +907,12 @@ def eval_cmd(
                             "similarity": round(r.similarity, 4)
                             if r.similarity is not None
                             else None,
+                            "rank_score": round(r.rank_score, 4)
+                            if r.rank_score is not None
+                            else None,
+                            "boundary_surprise": round(r.boundary_surprise, 4)
+                            if r.boundary_surprise is not None
+                            else None,
                             "theme_fit": round(r.theme_fit, 4)
                             if r.theme_fit is not None
                             else None,
@@ -851,9 +934,15 @@ def eval_cmd(
     table.add_column("Theme", style="green")
     table.add_column("Rank", justify="right", style="magenta")
     table.add_column("Sim", justify="right")
+    table.add_column("Score", justify="right")
+    table.add_column("Bound", justify="right")
     for r in report.rows:
         rank_str = str(r.rank) if r.rank is not None else "[red]-[/red]"
         sim_str = f"{r.similarity:.3f}" if r.similarity is not None else "-"
+        score_str = f"{r.rank_score:.3f}" if r.rank_score is not None else "-"
+        boundary_str = (
+            f"{r.boundary_surprise:.2f}" if r.boundary_surprise is not None else "-"
+        )
         table.add_row(
             r.query,
             r.expected,
@@ -862,6 +951,8 @@ def eval_cmd(
             r.theme or "-",
             rank_str,
             sim_str,
+            score_str,
+            boundary_str,
         )
     console.print(table)
 

@@ -8,9 +8,15 @@ from dataclasses import dataclass
 from .. import cache as cache_service
 from ..config import DB_PATH
 from ..phonetics.align import Alignment, alignment_from_dict, alignment_to_dict
-from ..phonetics.anchor import anchored_score, rhyme_tail, segs_from_stored
+from ..phonetics.anchor import (
+    anchored_score,
+    boundary_surprise,
+    rhyme_tail,
+    segs_from_stored,
+)
 from ..pronounce import enriched_segment_variants, enriched_segments, tokenize
 from .index import candidate_ids, tail_candidate_ids
+from .ranking import ScoreComponents, rank_base
 
 # Backwards-compatible alias (decoder.py imports this name).
 _segs_from_row = segs_from_stored
@@ -19,42 +25,60 @@ _segs_from_row = segs_from_stored
 @dataclass
 class RhymeResult:
     word: str
-    similarity: float  # the anchored blend used for ranking
-    full_similarity: float
-    tail_similarity: float
-    stress_similarity: float
     frequency: float
     syllable_count: int
     ipa: str
     alignment: Alignment
-    theme_fit: float | None = None
+    scores: ScoreComponents
+
+    @property
+    def similarity(self) -> float:
+        return self.scores.phonetic_similarity
+
+    @property
+    def full_similarity(self) -> float:
+        return self.scores.full_similarity
+
+    @property
+    def tail_similarity(self) -> float:
+        return self.scores.tail_similarity
+
+    @property
+    def stress_similarity(self) -> float:
+        return self.scores.stress_similarity
+
+    @property
+    def boundary_surprise(self) -> float:
+        return self.scores.boundary_surprise
+
+    @property
+    def theme_fit(self) -> float | None:
+        return self.scores.theme_fit
+
+    @property
+    def rank_score(self) -> float:
+        return self.scores.rank_score
 
 
 def _result_to_dict(r: RhymeResult) -> dict:
     return {
         "word": r.word,
-        "similarity": r.similarity,
-        "full_similarity": r.full_similarity,
-        "tail_similarity": r.tail_similarity,
-        "stress_similarity": r.stress_similarity,
         "frequency": r.frequency,
         "syllable_count": r.syllable_count,
         "ipa": r.ipa,
         "alignment": alignment_to_dict(r.alignment),
+        "scores": r.scores.to_dict(),
     }
 
 
 def _result_from_dict(d: dict) -> RhymeResult:
     return RhymeResult(
         word=d["word"],
-        similarity=d["similarity"],
-        full_similarity=d["full_similarity"],
-        tail_similarity=d["tail_similarity"],
-        stress_similarity=d["stress_similarity"],
         frequency=d["frequency"],
         syllable_count=d["syllable_count"],
         ipa=d["ipa"],
         alignment=alignment_from_dict(d["alignment"]),
+        scores=ScoreComponents.from_dict(d["scores"]),
     )
 
 
@@ -180,22 +204,33 @@ def find_rhymes(
             )
             if score is None or s.anchored_similarity > score.anchored_similarity:
                 score = s
+        surprise = boundary_surprise(score.full_alignment)
+        base_score = rank_base(
+            score.anchored_similarity,
+            score.stress_similarity,
+            surprise,
+        )
         existing = best.get(written_form)
-        if existing is None or score.anchored_similarity > existing.similarity:
+        if existing is None or base_score > existing.rank_score:
             best[written_form] = RhymeResult(
                 word=written_form,
-                similarity=score.anchored_similarity,
-                full_similarity=score.full_similarity,
-                tail_similarity=score.tail_similarity,
-                stress_similarity=score.stress_similarity,
                 frequency=frequency or 0.0,
                 syllable_count=syllable_count or 0,
                 ipa=ipa or "",
                 alignment=score.full_alignment,
+                scores=ScoreComponents(
+                    phonetic_similarity=score.anchored_similarity,
+                    full_similarity=score.full_similarity,
+                    tail_similarity=score.tail_similarity,
+                    stress_similarity=score.stress_similarity,
+                    boundary_surprise=surprise,
+                    base_score=base_score,
+                    rank_score=base_score,
+                ),
             )
 
     results = sorted(
-        best.values(), key=lambda r: (r.similarity, r.frequency), reverse=True
+        best.values(), key=lambda r: (r.rank_score, r.frequency), reverse=True
     )[:limit]
 
     if cache_key is not None:

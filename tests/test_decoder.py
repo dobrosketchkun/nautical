@@ -36,6 +36,8 @@ def test_multiword_structure(db_path):
     assert scores == sorted(scores, reverse=True)
     for r in results:
         assert r.ipa
+        assert r.alignment.pairs
+        assert 0.0 <= r.boundary_surprise <= 1.0
         assert len(r.chunks) == r.num_words
         assert all(alignment.pairs for _, alignment in r.chunks)
 

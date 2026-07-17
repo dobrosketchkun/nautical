@@ -52,11 +52,11 @@ browser UI and word-transformation "puns" are deferred (see [Roadmap](#roadmap))
   naturalness scoring (so `not a cult` outranks `nawt ick ull`, but playful
   oronyms like `gnaw tickle` still surface lower down).
 - **Semantics from the start.** Rerank results by how well they fit a verse's
-  **theme**, or expand a **seed** word into a semantically related pool to rhyme
-  against — both powered by local GloVe vectors.
+  **theme**, browse a standalone semantic **chain**, or pass `--seed` to expand
+  a concept and use that neighborhood directly while ranking rhymes.
 - **Every result is explained.** Each candidate ships with its phoneme alignment
-  and a decomposed score (phonetic / tail / stress / naturalness / theme_fit),
-  never a single opaque number.
+  and a decomposed score (phonetic / tail / stress / naturalness /
+  boundary-surprise / theme-fit), plus the explicit `rank_score` used to order it.
 - **Fully offline.** No paid APIs, no phone-home model servers. SQLite for
   storage; everything runs in-process.
 
@@ -126,6 +126,9 @@ nautical rhymes "stainless" --align
 # Rerank by a verse theme
 nautical rhymes "barnacle" --theme "ocean, sea, ship"
 
+# Expand a semantic seed and use its neighborhood as rhyme context
+nautical rhymes "emotion" --seed "bank"
+
 # Compare two texts directly
 nautical distance "not a cult" "nautical"
 
@@ -154,6 +157,8 @@ The primary command. Single-word by default; add `--multiword` for the decoder.
 | `--anchor V` | 0.5 (single) / 0.0 (multiword) | `full`, `tail`, or a float 0..1. Blends full-span vs rhyme-tail similarity. |
 | `--min-similarity F` | 0.0 | Drop results below this similarity. |
 | `--theme "a, b, c"` | — | Rerank by semantic fit to these terms. |
+| `--seed "a, b"` | — | Expand semantic seed terms, then use the expanded neighborhood as context. |
+| `--seed-limit N` | 25 | Number of lexicon neighbors added per seed search. |
 | `--theme-weight F` | 0.5 | Blend: 0 = phonetics only, 1 = theme only. |
 | `--min-theme F` | — | Drop results whose theme_fit is below this (−1..1). |
 | `--include-self` | off | Include the query word itself in results. |
@@ -174,6 +179,7 @@ nautical rhymes "emotion" --anchor tail --limit 10
 nautical rhymes "stainless" --exclude "spineless,skinless"
 nautical rhymes "not a cult" --multiword --max-words 3 --min-words 2
 nautical rhymes "barnacle" --theme "ocean, sea, ship" --theme-weight 0.7 --json
+nautical rhymes "emotion" --seed "bank" --seed-limit 15
 ```
 
 ### `nautical distance TEXT_A TEXT_B` — score two texts
@@ -201,8 +207,9 @@ nautical pronounce "spifflicated" --all
 
 ### `nautical chain SEED` — semantic expansion
 
-Expands a seed word (or comma-separated seeds) into a pool of semantically
-related **lexicon** words to then rhyme against. Requires vectors.
+Expands a seed word (or comma-separated seeds) into a standalone pool of
+semantically related **lexicon** words. Requires vectors. To connect that pool
+directly to rhyme discovery, use `nautical rhymes TEXT --seed SEED`.
 
 Options: `--limit`, `--json`.
 
@@ -269,6 +276,12 @@ Shows lexeme/pronunciation counts, DB size, schema version, and cache summary.
   end-rhymes (`stainless → brainless, painless`). The default blends both.
 - **Theme** (`--theme` + `--theme-weight`): float on-theme candidates up without
   hiding the phonetic score — `theme_fit` is reported as its own column.
+- **Semantic seed** (`--seed` + `--seed-limit`): expand a concept through the
+  same neighborhood used by `chain`, then use the expanded terms as context.
+- **Boundary surprise**: compares internal word boundaries after phoneme
+  alignment. `stainless → brainless` is low-surprise; `not a cult → nautical`
+  is high-surprise. It is reported separately and contributes a small,
+  provisional ranking bonus.
 - **Word-boundary leniency** (on by default; `--strict-boundaries` to disable):
   makes word-final consonants cheap to drop, matching how singers elide them
   (the `/t/` in *not a cult*). Turn it off for stricter, literal matching.
@@ -293,8 +306,10 @@ selection (word or phrase)
        phonetic decoder + naturalness    → multi-word candidates (search/decoder.py)
   → score: feature-weighted alignment (phonetics/align.py, distance.py)
            anchored blend full ↔ tail   (phonetics/anchor.py)
-  → theme rerank (optional, GloVe)      (semantics/)
-  → present ranked candidates + phoneme alignment (the explanation)
+           stress + boundary surprise   (search/ranking.py)
+           naturalness (multi-word)     (search/decoder.py)
+  → context rerank (theme/seed, GloVe)  (semantics/)
+  → present rank_score + components + phoneme alignment
 ```
 
 Search is two-stage: a phoneme bi/tri-gram overlap index retrieves a generous
@@ -303,6 +318,14 @@ When anchoring favors the tail, a separate rhyme-signature index is unioned in s
 end-rhymes that share little else still surface. The multi-word decoder tiles the
 target with real words via an onset index + beam DP, ranked by a blend of
 phonetic fit and word-frequency naturalness.
+
+All candidates use the same named score contract. `rank_score` is the actual
+ordering key; `similarity` remains the phonetic component. Theme/seed context is
+blended with the complete base score, so multi-word naturalness, stress, and
+boundary surprise are not discarded during semantic reranking. Phase 9 weights
+are provisional; calibration against a larger judged corpus remains deferred.
+`rank_score` is therefore an ordering value and may exceed 1 — it is not a
+probability or a replacement for the separately reported similarity.
 
 ---
 
@@ -386,8 +409,9 @@ tests/                 # pytest suite
 ## Roadmap
 
 **In scope (built):** boundary-free retrieval, feature-weighted distance,
-single-word search, multi-word decoder, tail/full-span anchoring, theme
-reranking + semantic chains, caching, evaluation harness.
+single-word search, multi-word decoder, tail/full-span anchoring, coherent
+decomposed ranking, boundary-surprise scoring, theme reranking, standalone and
+connected semantic chains, caching, evaluation harness.
 
 **Deferred (later phases):**
 

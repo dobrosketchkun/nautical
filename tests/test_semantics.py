@@ -7,6 +7,8 @@ import numpy as np
 import pytest
 
 from nautical.search.words import RhymeResult
+from nautical.search.ranking import ScoreComponents
+from nautical.semantics import theme as theme_service
 from nautical.semantics import vectors as vectors_service
 from nautical.semantics.theme import apply_theme, parse_terms
 from nautical.semantics.vectors import Vectors, VectorsUnavailable
@@ -33,14 +35,18 @@ def vecs() -> Vectors:
 def _rhyme(word: str, similarity: float) -> RhymeResult:
     return RhymeResult(
         word=word,
-        similarity=similarity,
-        full_similarity=similarity,
-        tail_similarity=similarity,
-        stress_similarity=1.0,
         frequency=1e-5,
         syllable_count=2,
         ipa="",
         alignment=None,
+        scores=ScoreComponents(
+            phonetic_similarity=similarity,
+            full_similarity=similarity,
+            tail_similarity=similarity,
+            stress_similarity=1.0,
+            base_score=similarity,
+            rank_score=similarity,
+        ),
     )
 
 
@@ -112,6 +118,23 @@ def test_apply_theme_min_theme_filters(vecs):
     words = [r.word for r in reranked]
     assert "nautical" in words
     assert "cat" not in words
+
+
+def test_apply_theme_preserves_complete_base_score(vecs):
+    cat = _rhyme("cat", 0.5)
+    nautical = _rhyme("nautical", 0.5)
+    cat.scores.base_score = cat.scores.rank_score = 1.5
+    reranked = apply_theme([cat, nautical], ["ocean"], vecs, weight=0.1)
+    assert reranked[0].word == "cat"
+    assert reranked[0].rank_score > reranked[1].rank_score
+
+
+def test_expand_seed_terms_keeps_seed_and_uses_allowed_neighbors(vecs):
+    expanded = theme_service.expand_seed_terms(
+        ["bank"], vecs, limit=2, allowed={"money", "currency", "cat"}
+    )
+    assert expanded[0] == "bank"
+    assert set(expanded[1:]) <= {"money", "currency"}
 
 
 def test_lexicon_guard_when_db_absent(tmp_path):

@@ -62,6 +62,39 @@ def rhyme_tail(segs: list[Seg]) -> list[Seg]:
     return list(segs[start:])
 
 
+def _internal_boundary_columns(alignment: Alignment, side: str) -> set[int]:
+    """Return aligned columns after which ``side`` has an internal word boundary."""
+    attr = "src" if side == "src" else "tgt"
+    occupied = [
+        i for i, pair in enumerate(alignment.pairs) if getattr(pair, attr) is not None
+    ]
+    if not occupied:
+        return set()
+    final_column = occupied[-1]
+    return {
+        i
+        for i, pair in enumerate(alignment.pairs)
+        if i != final_column
+        and (seg := getattr(pair, attr)) is not None
+        and seg.word_final
+    }
+
+
+def boundary_surprise(alignment: Alignment) -> float:
+    """Measure how much internal word segmentation moved across an alignment.
+
+    Boundaries are compared in aligned phoneme-column space. The mandatory final
+    sequence boundary is ignored. Jaccard distance gives 0 for the same
+    segmentation and 1 when all internal boundaries differ.
+    """
+    source = _internal_boundary_columns(alignment, "src")
+    target = _internal_boundary_columns(alignment, "tgt")
+    union = source | target
+    if not union:
+        return 0.0
+    return len(source ^ target) / len(union)
+
+
 @dataclass
 class AnchoredScore:
     full_similarity: float
