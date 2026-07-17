@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "nautical"
 version = "0.0.1"
 description = "Phonetic Creativity Workbench - offline rhyme discovery engine"
-readme = "docs/STEP_ONE.md"
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "cmudict>=1.0.13",

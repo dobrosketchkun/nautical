@@ -1,11 +1,13 @@
-"""GloVe 6B (300d) static word vectors, filtered to the lexicon.
+"""GloVe 6B (300d) static word vectors (full vocabulary).
 
 The raw 822 MB ``glove.6B.zip`` is downloaded once (if absent) and the single
-dimension we use is extracted, then streamed line by line and filtered to the
-words that exist in our lexicon. The surviving vectors are L2-normalized (so
-cosine similarity is a plain dot product) and cached as a compact ``float32``
-``.npy`` matrix plus a parallel ``vocab.txt``. Everything is offline after the
-one-time download; a pre-staged raw file or cache skips it entirely.
+dimension we use is extracted, then streamed line by line. Every vector is kept
+(the full ~400K vocabulary) so any theme/seed word the user types resolves, not
+just words in our lexicon; ``chain`` masks its neighbor suggestions back to the
+lexicon at query time. Vectors are L2-normalized (so cosine similarity is a plain
+dot product) and cached as a compact ``float32`` ``.npy`` matrix plus a parallel
+``vocab.txt``. Everything is offline after the one-time download; a pre-staged raw
+file or cache skips it entirely.
 """
 
 from __future__ import annotations
@@ -95,9 +97,12 @@ def download_glove(dest: Path | None = None) -> Path:
 
 
 def build_vectors(force: bool = False, db_path: Path | None = None) -> dict[str, int]:
-    """Filter the raw GloVe file to the lexicon and cache the normalized matrix.
+    """Cache the full normalized GloVe matrix (no lexicon filtering).
 
-    Downloads the raw file first if it is absent. Returns a small stats dict.
+    Every vector in the raw file is kept so any theme/seed word resolves; the
+    lexicon mask is applied later, only for ``chain`` suggestions. Downloads the
+    raw file first if it is absent. The ``db_path`` argument is accepted for
+    backward compatibility but no longer used. Returns a small stats dict.
     """
     ensure_vectors_dir()
     if GLOVE_MATRIX.exists() and GLOVE_VOCAB.exists() and not force:
@@ -108,19 +113,15 @@ def build_vectors(force: bool = False, db_path: Path | None = None) -> dict[str,
     if not GLOVE_RAW.exists():
         download_glove()
 
-    keep = _lexicon_words(db_path)
-
     words: list[str] = []
     rows: list[np.ndarray] = []
-    _log(f"[cyan]Filtering[/cyan] {GLOVE_RAW.name} to {len(keep):,} lexicon words...")
+    _log(f"[cyan]Loading[/cyan] full vocabulary from {GLOVE_RAW.name}...")
     with open(GLOVE_RAW, "r", encoding="utf-8") as fh:
         for line in fh:
             space = line.find(" ")
             if space <= 0:
                 continue
             word = line[:space]
-            if word not in keep:
-                continue
             vec = np.fromstring(line[space + 1 :], sep=" ", dtype=np.float32)
             if vec.shape[0] != GLOVE_DIM:
                 continue
@@ -132,7 +133,7 @@ def build_vectors(force: bool = False, db_path: Path | None = None) -> dict[str,
 
     if not rows:
         raise VectorsUnavailable(
-            "No lexicon words found in the GloVe file; is the file correct?"
+            "No vectors parsed from the GloVe file; is the file correct?"
         )
 
     matrix = np.vstack(rows).astype(np.float32)
@@ -211,21 +212,29 @@ class Vectors:
         return float(np.dot(va, vb))
 
     def most_similar(
-        self, vector: np.ndarray, topn: int = 25, exclude: set[str] | None = None
+        self,
+        vector: np.ndarray,
+        topn: int = 25,
+        exclude: set[str] | None = None,
+        allowed: set[str] | None = None,
     ) -> list[tuple[str, float]]:
-        """Return the ``topn`` nearest vocabulary words to ``vector`` by cosine."""
+        """Return the ``topn`` nearest vocabulary words to ``vector`` by cosine.
+
+        When ``allowed`` is given, only words in that set are returned (used to
+        mask the full vocabulary back down to lexicon words for ``chain``).
+        """
         if self.matrix.shape[0] == 0:
             return []
         exclude = {w.lower() for w in (exclude or set())}
+        allowed = {w.lower() for w in allowed} if allowed is not None else None
         scores = np.asarray(self.matrix) @ np.asarray(vector, dtype=np.float32)
-        # Grab a few extra to cover excluded words, then trim after sorting.
-        k = min(len(scores), topn + len(exclude) + 1)
-        top = np.argpartition(-scores, k - 1)[:k]
-        top = top[np.argsort(-scores[top])]
+        order = np.argsort(-scores)
         out: list[tuple[str, float]] = []
-        for idx in top:
+        for idx in order:
             word = self.vocab[idx]
             if word in exclude:
+                continue
+            if allowed is not None and word not in allowed:
                 continue
             out.append((word, float(scores[idx])))
             if len(out) >= topn:

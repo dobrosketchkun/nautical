@@ -9,7 +9,7 @@ from .. import cache as cache_service
 from ..config import DB_PATH
 from ..phonetics.align import Alignment, alignment_from_dict, alignment_to_dict
 from ..phonetics.anchor import anchored_score, rhyme_tail, segs_from_stored
-from ..pronounce import enriched_segments, tokenize
+from ..pronounce import enriched_segment_variants, enriched_segments, tokenize
 from .index import candidate_ids, tail_candidate_ids
 
 # Backwards-compatible alias (decoder.py imports this name).
@@ -65,6 +65,9 @@ def rhymes_cache_key(
     strictness: float,
     anchor: float,
     include_self: bool,
+    word_boundary_leniency: bool = True,
+    multi_variant: bool = True,
+    exclude: frozenset[str] | None = None,
 ) -> str:
     """Cache key for a single-word search (phonetic params only)."""
     return cache_service.make_key(
@@ -76,6 +79,9 @@ def rhymes_cache_key(
             "strictness": strictness,
             "anchor": anchor,
             "include_self": include_self,
+            "word_boundary_leniency": word_boundary_leniency,
+            "multi_variant": multi_variant,
+            "exclude": sorted(exclude) if exclude else [],
         },
     )
 
@@ -87,6 +93,9 @@ def find_rhymes(
     strictness: float = 0.5,
     anchor: float = 0.5,
     include_self: bool = False,
+    word_boundary_leniency: bool = True,
+    multi_variant: bool = True,
+    exclude: frozenset[str] | None = None,
     use_cache: bool = True,
     conn: sqlite3.Connection | None = None,
 ) -> list[RhymeResult]:
@@ -97,13 +106,19 @@ def find_rhymes(
     similarity; when it favors the tail, the tail n-gram index is also queried so
     end-rhymes that share little else still enter the pool.
 
+    ``multi_variant`` scores the query's every pronunciation variant and keeps the
+    best per candidate; ``word_boundary_leniency`` makes word-final consonants
+    cheap to drop; ``exclude`` drops those words from the results before limiting.
+
     Results are cached (keyed on the phonetic params) unless ``use_cache`` is
     False or an explicit ``conn`` is supplied (tests pass their own DB).
     """
+    exclude = exclude or frozenset()
     cache_key = None
     if use_cache and conn is None:
         cache_key = rhymes_cache_key(
-            text, limit, pool, strictness, anchor, include_self
+            text, limit, pool, strictness, anchor, include_self,
+            word_boundary_leniency, multi_variant, exclude,
         )
         cached = cache_service.cache_get(cache_key)
         if cached is not None:
@@ -113,15 +128,22 @@ def find_rhymes(
     if own_conn:
         conn = sqlite3.connect(DB_PATH)
     try:
-        target_segs = enriched_segments(text, conn=conn)
-        if not target_segs:
+        if multi_variant:
+            target_variants = enriched_segment_variants(text, conn=conn)
+        else:
+            target_variants = [enriched_segments(text, conn=conn)]
+        target_variants = [tv for tv in target_variants if tv]
+        if not target_variants:
             return []
 
-        target_ipa = [s.ipa for s in target_segs]
-        ids = set(candidate_ids(conn, target_ipa, pool))
-        if anchor > 0.0:
-            tail_ipa = [s.ipa for s in rhyme_tail(target_segs)]
-            ids.update(tail_candidate_ids(conn, tail_ipa, pool))
+        # Union the candidate pool across every query variant.
+        ids: set[int] = set()
+        for target_segs in target_variants:
+            target_ipa = [s.ipa for s in target_segs]
+            ids.update(candidate_ids(conn, target_ipa, pool))
+            if anchor > 0.0:
+                tail_ipa = [s.ipa for s in rhyme_tail(target_segs)]
+                ids.update(tail_candidate_ids(conn, tail_ipa, pool))
         if not ids:
             return []
 
@@ -144,12 +166,20 @@ def find_rhymes(
     for written_form, frequency, arpabet, ipa_segments, ipa, syllable_count in rows:
         if not include_self and written_form in query_forms:
             continue
+        if written_form in exclude:
+            continue
         cand_segs = segs_from_stored(arpabet, ipa_segments)
         if not cand_segs:
             continue
-        score = anchored_score(
-            target_segs, cand_segs, anchor=anchor, strictness=strictness
-        )
+        # Best score across the query's pronunciation variants.
+        score = None
+        for target_segs in target_variants:
+            s = anchored_score(
+                target_segs, cand_segs, anchor=anchor, strictness=strictness,
+                word_boundary_leniency=word_boundary_leniency,
+            )
+            if score is None or s.anchored_similarity > score.anchored_similarity:
+                score = s
         existing = best.get(written_form)
         if existing is None or score.anchored_similarity > existing.similarity:
             best[written_form] = RhymeResult(

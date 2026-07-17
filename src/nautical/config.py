@@ -13,6 +13,9 @@ DB_PATH = DATA_DIR / "nautical.db"
 # Query-result cache; a separate file so it survives `db build` and needs no
 # SCHEMA_VERSION bump. Rebuildable, gitignored under data/.
 CACHE_DB_PATH = DATA_DIR / "cache.db"
+# User-editable exclusion list (one lowercase word per line, '#' comments).
+# Words here are dropped from search results; merged with any --exclude flag.
+EXCLUDE_PATH = DATA_DIR / "exclude.txt"
 
 SCHEMA_VERSION = "5"
 

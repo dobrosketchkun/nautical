@@ -30,8 +30,44 @@ _TIE_BAR = {"tʃ": "t͡ʃ", "dʒ": "d͡ʒ"}
 _APPROX = {"ɝ": ("ə", "ɹ"), "ɚ": ("ə", "ɹ")}
 
 
+def _patch_panphon_utf8() -> None:
+    """Force panphon to read its bundled data files as UTF-8.
+
+    panphon opens ``ipa_all.csv`` / ``feature_weights.csv`` via
+    ``importlib.resources.files(...).open()``, which uses the platform *default*
+    encoding. On Windows that is cp1252, which cannot decode the IPA characters
+    in the CSV, so the very first feature lookup crashes with
+    ``UnicodeDecodeError``. We wrap the ``files`` used by panphon so its
+    ``.open()`` defaults to UTF-8 - no env vars, re-exec, or edits to panphon.
+    """
+    import panphon.featuretable as _ft
+
+    if getattr(_ft, "_nautical_utf8_patched", False):
+        return
+    _orig_files = _ft.files
+
+    class _Utf8Path:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def joinpath(self, *parts):
+            return _Utf8Path(self._inner.joinpath(*parts))
+
+        def open(self, mode="r", *args, **kwargs):
+            if "b" not in mode and "encoding" not in kwargs:
+                kwargs["encoding"] = "utf-8"
+            return self._inner.open(mode, *args, **kwargs)
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
+
+    _ft.files = lambda anchor: _Utf8Path(_orig_files(anchor))
+    _ft._nautical_utf8_patched = True
+
+
 @lru_cache(maxsize=1)
 def _feature_table() -> panphon.FeatureTable:
+    _patch_panphon_utf8()
     return panphon.FeatureTable()
 
 

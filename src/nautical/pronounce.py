@@ -150,13 +150,26 @@ def pronounce_phrase(text: str, conn: sqlite3.Connection | None = None) -> Phras
     )
 
 
+def _segs_from_pronunciation(pron: Pronunciation) -> list[Seg]:
+    """Build ``Seg``s for one pronunciation, marking the final segment word-final."""
+    segs: list[Seg] = []
+    for phone, ipa_segment in zip(pron.arpabet, pron.ipa_segments):
+        stress = phone[-1] if phone and phone[-1].isdigit() else ""
+        segs.append(Seg(ipa=ipa_segment, stress=stress, is_vowel=is_vowel(phone)))
+    if segs:
+        segs[-1].word_final = True
+    return segs
+
+
 def enriched_segments(
     text: str, conn: sqlite3.Connection | None = None
 ) -> list[Seg]:
-    """Return per-segment ``Seg(ipa, stress, is_vowel)`` for a phrase.
+    """Return per-segment ``Seg(ipa, stress, is_vowel, word_final)`` for a phrase.
 
     Uses each token's primary variant, deriving per-segment stress and vowel-ness
-    from the ARPAbet<->IPA 1:1 correspondence. Consumed by the phonetic aligner.
+    from the ARPAbet<->IPA 1:1 correspondence. The last segment of every token is
+    flagged ``word_final`` so the aligner can apply word-boundary leniency.
+    Consumed by the phonetic aligner.
     """
     phrase = pronounce_phrase(text, conn=conn)
     segments: list[Seg] = []
@@ -164,9 +177,47 @@ def enriched_segments(
         primary = word_pron.primary
         if primary is None:
             continue
-        for phone, ipa_segment in zip(primary.arpabet, primary.ipa_segments):
-            stress = phone[-1] if phone[-1].isdigit() else ""
-            segments.append(
-                Seg(ipa=ipa_segment, stress=stress, is_vowel=is_vowel(phone))
-            )
+        segments.extend(_segs_from_pronunciation(primary))
     return segments
+
+
+# Cap on the per-token variant product for a phrase, to avoid combinatorial
+# blow-up; above this the phrase falls back to primary-variant segments only.
+_MAX_PHRASE_VARIANTS = 8
+
+
+def enriched_segment_variants(
+    text: str, conn: sqlite3.Connection | None = None
+) -> list[list[Seg]]:
+    """Return one enriched-segment list per pronunciation variant of ``text``.
+
+    A single-word input yields every CMUdict variant. A multi-word phrase yields
+    the Cartesian product of its tokens' variants, but only when that product is
+    small (<= ``_MAX_PHRASE_VARIANTS``); otherwise it falls back to a single
+    primary-variant list to avoid combinatorial blow-up.
+    """
+    phrase = pronounce_phrase(text, conn=conn)
+    token_variant_segs: list[list[list[Seg]]] = []
+    for word_pron in phrase.tokens:
+        if not word_pron.variants:
+            continue
+        token_variant_segs.append(
+            [_segs_from_pronunciation(v) for v in word_pron.variants]
+        )
+
+    if not token_variant_segs:
+        return []
+
+    total = 1
+    for options in token_variant_segs:
+        total *= len(options)
+    if total > _MAX_PHRASE_VARIANTS:
+        # Too many combinations; use the primary variant of each token.
+        return [[seg for options in token_variant_segs for seg in options[0]]]
+
+    import itertools
+
+    combos: list[list[Seg]] = []
+    for combo in itertools.product(*token_variant_segs):
+        combos.append([seg for token_segs in combo for seg in token_segs])
+    return combos

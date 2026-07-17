@@ -90,6 +90,8 @@ def multiword_cache_key(
     min_words: int,
     strictness: float,
     anchor: float,
+    word_boundary_leniency: bool = True,
+    exclude: frozenset[str] | None = None,
 ) -> str:
     """Cache key for a multi-word decode (phonetic params only)."""
     return cache_service.make_key(
@@ -103,6 +105,8 @@ def multiword_cache_key(
             "min_words": min_words,
             "strictness": strictness,
             "anchor": anchor,
+            "word_boundary_leniency": word_boundary_leniency,
+            "exclude": sorted(exclude) if exclude else [],
         },
     )
 
@@ -131,6 +135,7 @@ def _position_transitions(
     cand_per_pos: int,
     strictness: float,
     skip_words: set[str],
+    word_boundary_leniency: bool = True,
 ) -> list[_Transition]:
     """Candidate word transitions starting at target position ``i``."""
     n = len(target)
@@ -164,7 +169,10 @@ def _position_transitions(
         for length in (p_len - 1, p_len, p_len + 1):
             if length < 1 or i + length > n:
                 continue
-            alignment = align(cand_segs, target[i : i + length], strictness=strictness)
+            alignment = align(
+                cand_segs, target[i : i + length], strictness=strictness,
+                word_boundary_leniency=word_boundary_leniency,
+            )
             transitions.append(
                 _Transition(
                     word=written_form,
@@ -218,6 +226,8 @@ def find_multiword(
     min_words: int = 2,
     strictness: float = 0.5,
     anchor: float = 0.0,
+    word_boundary_leniency: bool = True,
+    exclude: frozenset[str] | None = None,
     use_cache: bool = True,
     conn: sqlite3.Connection | None = None,
 ) -> list[MultiwordResult]:
@@ -228,14 +238,18 @@ def find_multiword(
     tilings whose ending matches the target's rhyme. Multi-word echoes are
     inherently full-span, so the default is ``0.0``.
 
+    ``word_boundary_leniency`` makes word-final consonants cheap to drop;
+    ``exclude`` bars those words from every tiling.
+
     Results are cached (keyed on the phonetic params) unless ``use_cache`` is
     False or an explicit ``conn`` is supplied.
     """
+    exclude = exclude or frozenset()
     cache_key = None
     if use_cache and conn is None:
         cache_key = multiword_cache_key(
             text, limit, beam_width, cand_per_pos, max_words, min_words,
-            strictness, anchor,
+            strictness, anchor, word_boundary_leniency, exclude,
         )
         cached = cache_service.cache_get(cache_key)
         if cached is not None:
@@ -251,7 +265,7 @@ def find_multiword(
             return []
 
         input_tokens = tokenize(text)
-        skip_words = {text.strip().lower()}
+        skip_words = {text.strip().lower()} | set(exclude)
 
         # nodes[n] holds completed tilings; there are combinatorially many, so it
         # is capped (by cost) during the DP to bound memory. The final rerank is
@@ -270,7 +284,8 @@ def find_multiword(
 
             if not transitions[i]:
                 transitions[i] = _position_transitions(
-                    conn, target, i, cand_per_pos, strictness, skip_words
+                    conn, target, i, cand_per_pos, strictness, skip_words,
+                    word_boundary_leniency,
                 )
 
             pos_transitions = transitions[i]
@@ -311,7 +326,8 @@ def find_multiword(
             similarity = max(0.0, 1.0 - entry[0] / n)
             if anchor > 0.0:
                 tail_similarity, _, _ = score_segments(
-                    target_tail, rhyme_tail(segs), strictness=strictness
+                    target_tail, rhyme_tail(segs), strictness=strictness,
+                    word_boundary_leniency=word_boundary_leniency,
                 )
                 similarity = (1.0 - anchor) * similarity + anchor * tail_similarity
             naturalness = sum(_freq_score(tr.frequency) for tr in steps) / len(steps)

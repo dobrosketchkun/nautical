@@ -39,3 +39,25 @@ def test_oov_g2p(db_path):
     assert word.primary is not None
     assert word.primary.source == "g2p"
     assert word.primary.syllable_count >= 3
+
+
+def test_enriched_segments_marks_word_final(db_path):
+    segs = pronounce.enriched_segments("not a cult", conn=_conn(db_path))
+    # The /t/ ending "not" is word-final even though it is mid-phrase.
+    word_finals = [s for s in segs if s.word_final]
+    assert len(word_finals) == 3  # one per token
+    assert segs[-1].word_final
+
+
+def test_enriched_segment_variants_multiple(db_path):
+    # "read" has two CMUdict pronunciations (R IY D and R EH D).
+    variants = pronounce.enriched_segment_variants("read", conn=_conn(db_path))
+    assert len(variants) >= 2
+    ipas = {"".join(s.ipa for s in v) for v in variants}
+    assert len(ipas) >= 2
+
+
+def test_enriched_segment_variants_phrase_capped(db_path):
+    # A phrase still returns at least one full-segment list.
+    variants = pronounce.enriched_segment_variants("not a cult", conn=_conn(db_path))
+    assert variants and all(v for v in variants)

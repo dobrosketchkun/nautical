@@ -43,12 +43,22 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   (last stressed vowel -> end), so it does not depend on the heuristic
   `phonology/syllable.py`. The syllabifier's heuristic intervocalic rule remains
   documented for other uses but is not on the anchoring path.
-- [ ] **(P2/later) Word-final vs sequence-final consonant leniency.** Cheap
-  final-consonant deletion currently applies only at the end of the whole
-  boundary-free sequence, not at each word boundary within a phrase.
-- [ ] **(P2/later) Multi-variant alignment.** Distance aligns only each token's
-  primary (first CMUdict) variant; the full pronunciation lattice is ignored when
-  scoring.
+- [x] **(P2/P8) Word-final vs sequence-final consonant leniency. RESOLVED (P8).**
+  `Seg` now carries `word_final`, set on the last segment of every token
+  (`pronounce.enriched_segments`) and every stored candidate
+  (`anchor.segs_from_stored`). `align._gap_cost` treats a consonant as cheap to
+  delete (0.4) when it is sequence-final *or* word-final, so internal elisions
+  like the `/t/` in "not a cult" are cheap - matching how oronyms are performed.
+  The `word_boundary_leniency` flag threads through
+  `align`/`score_segments`/`anchored_score` (default on); `--strict-boundaries`
+  on `rhymes`/`distance` restores the old behavior.
+- [x] **(P2/P8) Multi-variant alignment. RESOLVED (P8).**
+  `pronounce.enriched_segment_variants` returns one segment list per CMUdict
+  variant for a single word, and the capped Cartesian product (<= 8 combos, else
+  primary-only) for a phrase. `phonetic_distance` and `find_rhymes` score every
+  variant and keep the best per candidate (`multi_variant=True` default;
+  `--primary-only` opts out). E.g. `read` (R IY D / R EH D) now matches `red`
+  exactly. The flag is part of the `rhymes` cache key.
 - [x] **(P5) Rhyme-tail ranking / onset-cluster gap penalty. RESOLVED (P5).**
   Phase 3 ranked by whole-word alignment similarity, which under-ranked perfect
   end-rhymes that differ only in onset length: for `stainless` (`steɪnləs`),
@@ -85,11 +95,17 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
      phonetic tiling; the artistic `not a cult <-> nautical` pairing relies on
      rhythm/semantics that arrive in Phases 5-6. The PHASES.md success check
      ("`not a cult` near the top") is therefore not met by Phase 4 alone.
-- [ ] **(P4) Candidate flooding by rare-word spellings.** Top-by-similarity is
-  crowded with near-identical spellings of the same sound (`naught a call`,
-  `gnaw to call`, `naught a cull`, `gnaw to cull`, ...). Naturalness partly
-  suppresses these; an IPA-level dedupe (keep the most natural spelling per
-  sound) would declutter and is a cheap future improvement.
+- [x] **(P4/P8) Candidate flooding by rare-word spellings. RESOLVED (P8) via a
+  user-managed exclusion list.** Top-by-similarity was crowded with
+  near-identical spellings of the same sound (`naught a call`, `gnaw to call`,
+  `naught a cull`, `gnaw to cull`, ...). Decision: *filter, don't collapse* -
+  `cull`/`gnaw` are real, distinct words, so an automatic IPA-level dedupe was
+  rejected (it would silently drop legitimate alternatives). Instead
+  `data/exclude.txt` (one lowercase word per line, `#` comments; loaded by
+  `src/nautical/exclude.py`) plus `--exclude "cull,naught"` let the writer hide
+  specific words. Applied inside `find_rhymes` (skips candidates) and
+  `find_multiword` (adds to `skip_words`) before the limit, and the exclusion set
+  is hashed into both cache keys so results stay correct.
 - [x] **(P7) Decoder latency - mitigated by caching.** Each query still aligns
   every onset-matching word at every target position (thousands of tiny
   alignments), so a *cold* query is ~seconds (single-word `stainless` ~10s,
@@ -130,19 +146,24 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
   re-run `nautical eval`. EN-JP echoes and transformation puns (`pun-stoppable`,
   `Ina-terested`, `Ina-sanity`) are deliberately excluded (out of scope for Step
   One). The harness (`src/nautical/eval.py`) makes the calibration debts below
-  *measurable*: baseline on the seed corpus is hit-rate@50 7/9 (78%), MRR 0.383,
-  median rank 2; `not a cult -> nautical` is rank 6 phonetically and rank 1 with
-  `--theme "ocean, sea, ship"`; the two reverse multi-word decodes
-  (`nautical -> not a cult`, `clean and stainless -> acting brainless`) are misses,
-  the known Phase 4/6 semantic gap, reported honestly rather than hidden.
+  *measurable*. **P8 baseline** (word-boundary leniency + multi-variant now on by
+  default; run after `cache clear` + full-vocab `vectors build --force`):
+  hit-rate@50 7/9 (78%), MRR 0.402, median rank (hits) 2; `not a cult -> nautical`
+  is rank 6 phonetically and rank 1 with `--theme "ocean, sea, ship"`; the two
+  reverse multi-word decodes (`nautical -> not a cult`,
+  `clean and stainless -> acting brainless`) are misses, the known Phase 4/6
+  semantic gap, reported honestly rather than hidden. (P7 baseline was MRR 0.383.)
 
-- **(P6) GloVe 6B 300d, auto-downloaded on first use.** The semantic layer uses
-  GloVe 6B (300d). `semantics/vectors.py:ensure_vectors()` lazily downloads
-  `glove.6B.zip` (~822 MB, one-time) if no cache/raw file is present, filters it
-  to the lexicon, L2-normalizes, and caches a `float32` `.npy` (~130 MB) plus a
-  `vocab.txt` under the gitignored `data/vectors/`. Offline after that. A
-  pre-staged raw file or cache skips the download. Primary mirror is Stanford,
-  fallback is HuggingFace (`config.GLOVE_ZIP_URLS`).
+- **(P6/P8) GloVe 6B 300d, auto-downloaded on first use, full vocabulary.** The
+  semantic layer uses GloVe 6B (300d). `semantics/vectors.py:ensure_vectors()`
+  lazily downloads `glove.6B.zip` (~822 MB, one-time) if no cache/raw file is
+  present, L2-normalizes, and caches a `float32` `.npy` plus a `vocab.txt` under
+  the gitignored `data/vectors/`. Offline after that. **P8 change:** vectors are
+  no longer filtered to the lexicon - the full ~400K vocabulary is kept (npy
+  ~458 MB, vocab ~4.5 MB) so any theme/seed word resolves; `chain` masks its
+  suggestions back to the lexicon via `most_similar(allowed=...)`. A pre-staged
+  raw file or cache skips the download. Primary mirror is Stanford, fallback is
+  HuggingFace (`config.GLOVE_ZIP_URLS`).
 - **(P6) Theme fit is a separate signal.** `--theme` reranks by a bounded blend
   `(1-w)*similarity + w*(theme_fit+1)/2` (default `--theme-weight 0.5`) but shows
   `theme_fit` (cosine, `[-1,1]`) as its own column/JSON field - the phonetic and
@@ -163,10 +184,13 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 - [ ] **(P7) Theme-blend weight is uncalibrated.** `--theme-weight` default 0.5
   and the bounded blend in `semantics/theme.py:apply_theme` are first-pass; tune
   against `some_lyrics.txt` verses in Phase 7.
-- [ ] **(P6/later) Theme/seed words limited to the lexicon-filtered vocab.**
-  Vectors are filtered to the ~100-110K lexicon words, so a verse/seed term that
-  is not a CMUdict entry is skipped (with a warning) rather than resolved against
-  full GloVe. Fix option: keep a small full-vocab side table for theme words only.
+- [x] **(P6/P8) Theme/seed words limited to the lexicon-filtered vocab.
+  RESOLVED (P8).** `build_vectors` no longer filters to the lexicon - it keeps all
+  ~400K GloVe vectors (npy ~112 MB -> ~458 MB, vocab ~4.5 MB), so any theme/seed
+  word the writer types resolves. `chain` still suggests only real lexicon words:
+  `most_similar` gained an `allowed` mask and `cli.chain` passes the lexicon set.
+  `--theme`/`theme_fit` need no mask (plain vector lookups). One-time
+  `nautical vectors build --force` regenerates the cache from the local raw file.
 - [ ] **(P6/later) Multi-word theme fit is a bag-of-words mean.** A phrase's
   `theme_fit` is the mean of its member-word vectors (OOV skipped); it ignores
   order and composition. Fine for reranking; revisit if phrase semantics matter.
@@ -198,3 +222,14 @@ Legend: [ ] open · [x] resolved · (Pn) = target/origin phase.
 - [x] **(P1) g2p_en first-run download.** `g2p_en` needs a one-time nltk tagger
   download; it was already present in `general_env_1`, so the OOV path works
   offline. Revisit only if setting up a fresh environment.
+- [x] **(P8) PanPhon cp1252 crash on Windows.** `panphon.FeatureTable()` reads
+  its bundled `ipa_all.csv` / `feature_weights.csv` via
+  `importlib.resources.files(...).open()` with **no encoding**, so it uses the
+  platform default. In an activated env on a cp1252 console (i.e. not UTF-8
+  mode), the first feature lookup crashed with `UnicodeDecodeError: 'charmap'
+  codec can't decode byte 0x90` (the CSV holds IPA). This was masked during
+  development because a persisted `PYTHONUTF8=1` / `conda run` made the default
+  UTF-8. Resolved in `phonetics/features.py:_patch_panphon_utf8()`, which wraps
+  the `files` used by `panphon.featuretable` so its `.open()` defaults to UTF-8 -
+  no env vars, no re-exec, no panphon edit; applied once before the table is
+  built and active in both the CLI and tests.

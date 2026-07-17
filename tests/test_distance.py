@@ -37,3 +37,25 @@ def test_strictness_monotonic(db_path):
         "not a cult", "nautical", strictness=0.9, conn=_conn(db_path)
     )
     assert lenient.similarity >= strict.similarity
+
+
+def test_multi_variant_never_worse_than_primary(db_path):
+    # "read" has an R EH D variant that matches "red" exactly; multi-variant must
+    # be at least as good as primary-only.
+    multi = phonetic_distance(
+        "read", "red", multi_variant=True, conn=_conn(db_path)
+    )
+    primary = phonetic_distance(
+        "read", "red", multi_variant=False, conn=_conn(db_path)
+    )
+    assert multi.similarity >= primary.similarity
+
+
+def test_strict_boundaries_not_higher_than_lenient(db_path):
+    lenient = phonetic_distance(
+        "not a cult", "nautical", word_boundary_leniency=True, conn=_conn(db_path)
+    )
+    strict = phonetic_distance(
+        "not a cult", "nautical", word_boundary_leniency=False, conn=_conn(db_path)
+    )
+    assert lenient.similarity >= strict.similarity

@@ -79,6 +79,21 @@ def test_most_similar_neighbors(vecs):
     assert set(neighbors) <= {"money", "currency", "interest"}
 
 
+def test_most_similar_allowed_mask(vecs):
+    seed = vecs.term_vector(["bank"])
+    allowed = {"money", "cat"}
+    neighbors = [
+        w
+        for w, _ in vecs.most_similar(
+            seed, topn=5, exclude={"bank"}, allowed=allowed
+        )
+    ]
+    # Only allowed words come back, even though other finance words score higher.
+    assert set(neighbors) <= allowed
+    assert "money" in neighbors
+    assert "currency" not in neighbors
+
+
 def test_apply_theme_floats_relevant_word_up(vecs):
     # cat is phonetically "closer" but off-theme; nautical is on-theme.
     results = [_rhyme("cat", 0.9), _rhyme("nautical", 0.5)]

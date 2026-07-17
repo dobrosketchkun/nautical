@@ -26,6 +26,7 @@ class Seg:
     ipa: str
     stress: str = ""  # "0" / "1" / "2" or "" for consonants
     is_vowel: bool = False
+    word_final: bool = False  # last segment of its word (for boundary leniency)
 
     @property
     def stressed(self) -> bool:
@@ -70,10 +71,10 @@ def alignment_to_dict(alignment: Alignment) -> dict:
             {
                 "src": None
                 if p.src is None
-                else [p.src.ipa, p.src.stress, p.src.is_vowel],
+                else [p.src.ipa, p.src.stress, p.src.is_vowel, p.src.word_final],
                 "tgt": None
                 if p.tgt is None
-                else [p.tgt.ipa, p.tgt.stress, p.tgt.is_vowel],
+                else [p.tgt.ipa, p.tgt.stress, p.tgt.is_vowel, p.tgt.word_final],
                 "op": p.op,
                 "cost": p.cost,
             }
@@ -86,7 +87,11 @@ def alignment_from_dict(data: dict) -> Alignment:
     """Rebuild an Alignment from :func:`alignment_to_dict` output."""
 
     def _seg(v: list | None) -> Seg | None:
-        return None if v is None else Seg(ipa=v[0], stress=v[1], is_vowel=v[2])
+        if v is None:
+            return None
+        # Back-compat: older cached payloads lack the word_final field.
+        word_final = v[3] if len(v) > 3 else False
+        return Seg(ipa=v[0], stress=v[1], is_vowel=v[2], word_final=word_final)
 
     pairs = [
         AlignedPair(src=_seg(p["src"]), tgt=_seg(p["tgt"]), op=p["op"], cost=p["cost"])
@@ -111,10 +116,18 @@ def _sub_cost(a: Seg, b: Seg, strictness: float) -> float:
     return distance * multiplier * _strictness_scale(strictness)
 
 
-def _gap_cost(seg: Seg, strictness: float, is_final: bool) -> float:
+def _gap_cost(
+    seg: Seg, strictness: float, is_final: bool, word_boundary_leniency: bool = True
+) -> float:
+    # A trailing consonant is cheap to drop at the end of the whole sequence and,
+    # when leniency is on, at any word boundary (singers routinely elide them,
+    # e.g. the /t/ in "not a cult").
+    cheap_consonant = not seg.is_vowel and (
+        is_final or (word_boundary_leniency and seg.word_final)
+    )
     if seg.is_vowel and not seg.stressed:
         base = 0.3
-    elif not seg.is_vowel and is_final:
+    elif cheap_consonant:
         base = 0.4
     elif seg.is_vowel and seg.stressed:
         base = 1.1
@@ -123,23 +136,31 @@ def _gap_cost(seg: Seg, strictness: float, is_final: bool) -> float:
     return base * _strictness_scale(strictness)
 
 
-def align(a: list[Seg], b: list[Seg], strictness: float = 0.5) -> Alignment:
+def align(
+    a: list[Seg],
+    b: list[Seg],
+    strictness: float = 0.5,
+    word_boundary_leniency: bool = True,
+) -> Alignment:
     n, m = len(a), len(b)
     dp = [[0.0] * (m + 1) for _ in range(n + 1)]
     back = [[""] * (m + 1) for _ in range(n + 1)]
 
+    def gap(seg: Seg, is_final: bool) -> float:
+        return _gap_cost(seg, strictness, is_final, word_boundary_leniency)
+
     for i in range(1, n + 1):
-        dp[i][0] = dp[i - 1][0] + _gap_cost(a[i - 1], strictness, is_final=(i == n))
+        dp[i][0] = dp[i - 1][0] + gap(a[i - 1], is_final=(i == n))
         back[i][0] = "del"
     for j in range(1, m + 1):
-        dp[0][j] = dp[0][j - 1] + _gap_cost(b[j - 1], strictness, is_final=(j == m))
+        dp[0][j] = dp[0][j - 1] + gap(b[j - 1], is_final=(j == m))
         back[0][j] = "ins"
 
     for i in range(1, n + 1):
         for j in range(1, m + 1):
             diag = dp[i - 1][j - 1] + _sub_cost(a[i - 1], b[j - 1], strictness)
-            delete = dp[i - 1][j] + _gap_cost(a[i - 1], strictness, is_final=(i == n))
-            insert = dp[i][j - 1] + _gap_cost(b[j - 1], strictness, is_final=(j == m))
+            delete = dp[i - 1][j] + gap(a[i - 1], is_final=(i == n))
+            insert = dp[i][j - 1] + gap(b[j - 1], is_final=(j == m))
             best = min(diag, delete, insert)
             dp[i][j] = best
             back[i][j] = "diag" if best == diag else ("del" if best == delete else "ins")
@@ -156,15 +177,11 @@ def align(a: list[Seg], b: list[Seg], strictness: float = 0.5) -> Alignment:
             i, j = i - 1, j - 1
         elif move == "del":
             src = a[i - 1]
-            pairs.append(
-                AlignedPair(src, None, "del", _gap_cost(src, strictness, is_final=(i == n)))
-            )
+            pairs.append(AlignedPair(src, None, "del", gap(src, is_final=(i == n))))
             i -= 1
         else:  # ins
             tgt = b[j - 1]
-            pairs.append(
-                AlignedPair(None, tgt, "ins", _gap_cost(tgt, strictness, is_final=(j == m)))
-            )
+            pairs.append(AlignedPair(None, tgt, "ins", gap(tgt, is_final=(j == m))))
             j -= 1
 
     pairs.reverse()

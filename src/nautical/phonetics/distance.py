@@ -13,7 +13,7 @@ from dataclasses import dataclass
 import editdistance
 
 from ..config import DB_PATH
-from ..pronounce import enriched_segments
+from ..pronounce import enriched_segment_variants, enriched_segments
 from .align import Alignment, Seg, align
 
 
@@ -41,14 +41,20 @@ def _stress_similarity(a: str, b: str) -> float:
 
 
 def score_segments(
-    segs_a: list[Seg], segs_b: list[Seg], strictness: float = 0.5
+    segs_a: list[Seg],
+    segs_b: list[Seg],
+    strictness: float = 0.5,
+    word_boundary_leniency: bool = True,
 ) -> tuple[float, float, Alignment]:
     """Align two segment sequences and return (similarity, stress_similarity, alignment).
 
     Shared by ``phonetic_distance`` and the search reranker so the similarity
     formula lives in one place.
     """
-    alignment = align(segs_a, segs_b, strictness=strictness)
+    alignment = align(
+        segs_a, segs_b, strictness=strictness,
+        word_boundary_leniency=word_boundary_leniency,
+    )
     columns = len(alignment.pairs) or 1
     similarity = max(0.0, 1.0 - alignment.total_cost / columns)
     stress_similarity = _stress_similarity(
@@ -61,22 +67,43 @@ def phonetic_distance(
     text_a: str,
     text_b: str,
     strictness: float = 0.5,
+    word_boundary_leniency: bool = True,
+    multi_variant: bool = True,
     conn: sqlite3.Connection | None = None,
 ) -> DistanceResult:
-    """Compute the decomposed phonetic distance between two texts."""
+    """Compute the decomposed phonetic distance between two texts.
+
+    When ``multi_variant`` is set, every pronunciation variant of each side is
+    scored and the best-matching pair is reported (so an alternate pronunciation
+    that rhymes better is not missed).
+    """
     own_conn = conn is None
     if own_conn:
         conn = sqlite3.connect(DB_PATH)
     try:
-        segs_a = enriched_segments(text_a, conn=conn)
-        segs_b = enriched_segments(text_b, conn=conn)
+        if multi_variant:
+            variants_a = enriched_segment_variants(text_a, conn=conn)
+            variants_b = enriched_segment_variants(text_b, conn=conn)
+        else:
+            variants_a = [enriched_segments(text_a, conn=conn)]
+            variants_b = [enriched_segments(text_b, conn=conn)]
     finally:
         if own_conn:
             conn.close()
 
-    similarity, stress_similarity, alignment = score_segments(
-        segs_a, segs_b, strictness=strictness
-    )
+    best: tuple[float, float, Alignment, list[Seg], list[Seg]] | None = None
+    for segs_a in variants_a:
+        for segs_b in variants_b:
+            similarity, stress_similarity, alignment = score_segments(
+                segs_a, segs_b, strictness=strictness,
+                word_boundary_leniency=word_boundary_leniency,
+            )
+            if best is None or similarity > best[0]:
+                best = (similarity, stress_similarity, alignment, segs_a, segs_b)
+
+    if best is None:
+        best = (0.0, 0.0, align([], []), [], [])
+    similarity, stress_similarity, alignment, segs_a, segs_b = best
 
     return DistanceResult(
         text_a=text_a,

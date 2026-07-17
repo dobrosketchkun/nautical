@@ -13,6 +13,7 @@ from rich.table import Table
 
 from . import cache as cache_service
 from . import eval as eval_service
+from . import exclude as exclude_service
 from . import pronounce as pronounce_service
 from .db import loader
 from .phonetics import distance as distance_service
@@ -195,7 +196,7 @@ def vectors_build(
         vectors_service.GLOVE_DIM, "--dim", help="GloVe dimension (informational)."
     ),
 ) -> None:
-    """Download (if needed) and cache GloVe vectors filtered to the lexicon."""
+    """Download (if needed) and cache the full GloVe vocabulary (~400K vectors)."""
     if dim != vectors_service.GLOVE_DIM:
         console.print(
             f"[yellow]Note:[/yellow] this build is wired for "
@@ -311,10 +312,26 @@ def distance(
     strictness: float = typer.Option(
         0.5, "--strictness", min=0.0, max=1.0, help="0 = forgiving, 1 = strict."
     ),
+    strict_boundaries: bool = typer.Option(
+        False,
+        "--strict-boundaries",
+        help="Disable cheap word-final consonant deletion (word-boundary leniency).",
+    ),
+    primary_only: bool = typer.Option(
+        False,
+        "--primary-only",
+        help="Score only each side's primary pronunciation (skip variants).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Phonetic distance between two texts, with the aligning explanation."""
-    result = distance_service.phonetic_distance(text_a, text_b, strictness=strictness)
+    result = distance_service.phonetic_distance(
+        text_a,
+        text_b,
+        strictness=strictness,
+        word_boundary_leniency=not strict_boundaries,
+        multi_variant=not primary_only,
+    )
 
     if as_json:
         typer.echo(
@@ -435,6 +452,21 @@ def rhymes(
     show_align: bool = typer.Option(
         False, "--align", help="Print the phoneme alignment for each result."
     ),
+    strict_boundaries: bool = typer.Option(
+        False,
+        "--strict-boundaries",
+        help="Disable cheap word-final consonant deletion (word-boundary leniency).",
+    ),
+    primary_only: bool = typer.Option(
+        False,
+        "--primary-only",
+        help="Score only the query's primary pronunciation (skip variants).",
+    ),
+    exclude: str = typer.Option(
+        None,
+        "--exclude",
+        help="Comma/space-separated words to drop, merged with data/exclude.txt.",
+    ),
     no_cache: bool = typer.Option(
         False, "--no-cache", help="Bypass the query-result cache for this search."
     ),
@@ -442,6 +474,9 @@ def rhymes(
 ) -> None:
     """Find single-word (or, with --multiword, multi-word) sound-alikes."""
     theme_terms = theme_service.parse_terms(theme) if theme else []
+    word_boundary_leniency = not strict_boundaries
+    multi_variant = not primary_only
+    exclusions = exclude_service.resolve_exclusions(exclude)
     if multiword:
         _rhymes_multiword(
             text,
@@ -457,6 +492,8 @@ def rhymes(
             theme_weight=theme_weight,
             min_theme=min_theme,
             show_align=show_align,
+            word_boundary_leniency=word_boundary_leniency,
+            exclusions=exclusions,
             use_cache=not no_cache,
             as_json=as_json,
         )
@@ -469,7 +506,8 @@ def rhymes(
     use_cache = not no_cache
     cached = use_cache and cache_service.cache_get(
         word_search.rhymes_cache_key(
-            text, fetch_limit, pool, strictness, anchor_val, include_self
+            text, fetch_limit, pool, strictness, anchor_val, include_self,
+            word_boundary_leniency, multi_variant, exclusions,
         )
     ) is not None
     started = time.perf_counter()
@@ -480,6 +518,9 @@ def rhymes(
         strictness=strictness,
         anchor=anchor_val,
         include_self=include_self,
+        word_boundary_leniency=word_boundary_leniency,
+        multi_variant=multi_variant,
+        exclude=exclusions,
         use_cache=use_cache,
     )
     elapsed = time.perf_counter() - started
@@ -571,13 +612,17 @@ def _rhymes_multiword(
     theme_weight: float,
     min_theme: float | None,
     show_align: bool,
-    use_cache: bool,
-    as_json: bool,
+    word_boundary_leniency: bool = True,
+    exclusions: frozenset[str] | None = None,
+    use_cache: bool = True,
+    as_json: bool = False,
 ) -> None:
+    exclusions = exclusions or frozenset()
     fetch_limit = max(limit, 100) if theme_terms else limit
     cached = use_cache and cache_service.cache_get(
         multiword_search.multiword_cache_key(
-            text, fetch_limit, beam, pool, max_words, min_words, strictness, anchor
+            text, fetch_limit, beam, pool, max_words, min_words, strictness, anchor,
+            word_boundary_leniency, exclusions,
         )
     ) is not None
     started = time.perf_counter()
@@ -590,6 +635,8 @@ def _rhymes_multiword(
         min_words=min_words,
         strictness=strictness,
         anchor=anchor,
+        word_boundary_leniency=word_boundary_leniency,
+        exclude=exclusions,
         use_cache=use_cache,
     )
     elapsed = time.perf_counter() - started
@@ -689,7 +736,15 @@ def chain(
         )
         raise typer.Exit(code=1)
 
-    neighbors = vecs.most_similar(seed_vec, topn=limit, exclude=set(seeds))
+    # Full-vocab vectors resolve any seed, but chain suggestions should stay
+    # within our lexicon; mask neighbors to real lexicon words.
+    try:
+        allowed = vectors_service._lexicon_words()
+    except vectors_service.VectorsUnavailable:
+        allowed = None
+    neighbors = vecs.most_similar(
+        seed_vec, topn=limit, exclude=set(seeds), allowed=allowed
+    )
 
     if as_json:
         typer.echo(

@@ -33,6 +33,9 @@ def segs_from_stored(arpabet: str, ipa_segments: str) -> list[Seg]:
     for phone, ipa_segment in zip(phones, segments):
         stress = phone[-1] if phone and phone[-1].isdigit() else ""
         result.append(Seg(ipa=ipa_segment, stress=stress, is_vowel=is_vowel(phone)))
+    # A stored pronunciation is a single word; its last segment is word-final.
+    if result:
+        result[-1].word_final = True
     return result
 
 
@@ -74,16 +77,19 @@ def anchored_score(
     cand_segs: list[Seg],
     anchor: float = 0.5,
     strictness: float = 0.5,
+    word_boundary_leniency: bool = True,
 ) -> AnchoredScore:
     """Score two segment sequences under the anchor dial.
 
     ``anchored_similarity = (1 - anchor) * full + anchor * tail``.
     """
     full_similarity, stress_similarity, full_alignment = score_segments(
-        target_segs, cand_segs, strictness=strictness
+        target_segs, cand_segs, strictness=strictness,
+        word_boundary_leniency=word_boundary_leniency,
     )
     tail_similarity, _, tail_alignment = score_segments(
-        rhyme_tail(target_segs), rhyme_tail(cand_segs), strictness=strictness
+        rhyme_tail(target_segs), rhyme_tail(cand_segs), strictness=strictness,
+        word_boundary_leniency=word_boundary_leniency,
     )
     anchored = (1.0 - anchor) * full_similarity + anchor * tail_similarity
     return AnchoredScore(
