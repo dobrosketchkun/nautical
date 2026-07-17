@@ -396,34 +396,6 @@ after both runtime vector files are validated.
 
 ---
 
-## Windows / conda note
-
-Default `conda run` re-encodes child stdout as cp1252 on Windows and will
-crash/garble the IPA characters and Rich table borders this tool prints. Always
-run output-producing commands with `--no-capture-output`:
-
-```powershell
-conda run --no-capture-output -n general_env_1 nautical rhymes "stainless"
-```
-
-Setting `$env:PYTHONUTF8=1` first is also recommended. Running inside an
-**activated** environment (`conda activate general_env_1`) avoids the wrapper
-entirely and is the simplest option.
-
----
-
-## Testing
-
-```bash
-# From the project root, inside the environment
-python -m pytest -q
-```
-
-The suite covers pronunciation, phonetic features/distance, alignment leniency,
-anchoring, single-word and multi-word search, exclusions, multi-variant scoring,
-semantics, caching, and the evaluation harness.
-
----
 
 ## Project layout
 
@@ -475,7 +447,6 @@ connected semantic chains, caching, evaluation harness.
 - Japanese–English cross-language echoes.
 - The browser editor UI.
 
-Engineering decisions, approximations, and open calibration debts are logged in
-[`docs/NOTES.md`](docs/NOTES.md). The narrowed first-vertical spec is in
-[`docs/STEP_ONE.md`](docs/STEP_ONE.md); the full vision is in
-[`docs/PROJECT.MD`](docs/PROJECT.MD).
+## PS
+
+The name of the repo is a wink to rhymes by Cali in [『TAKO∞TAKOVER』 - Ninomae Ina'nis](https://www.youtube.com/watch?v=6sAQ1wuYzxk)
