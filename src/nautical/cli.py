@@ -521,6 +521,19 @@ def rhymes(
     no_cache: bool = typer.Option(
         False, "--no-cache", help="Bypass the query-result cache for this search."
     ),
+    diversity: float = typer.Option(
+        0.35,
+        "--diversity",
+        min=0.0,
+        max=1.0,
+        help="Multi-word only: MMR word-overlap threshold (0 = pure rank order).",
+    ),
+    prefix_cap: int = typer.Option(
+        3,
+        "--prefix-cap",
+        min=0,
+        help="Multi-word only: max results sharing the same first word (0 = no cap).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Find single-word (or, with --multiword, multi-word) sound-alikes."""
@@ -545,6 +558,8 @@ def rhymes(
             show_align=show_align,
             word_boundary_leniency=word_boundary_leniency,
             exclude=exclude,
+            diversity=diversity,
+            prefix_cap=prefix_cap,
             use_cache=not no_cache,
             as_json=as_json,
         )
@@ -680,6 +695,8 @@ def _rhymes_multiword(
     show_align: bool,
     word_boundary_leniency: bool = True,
     exclude: str | None = None,
+    diversity: float = 0.35,
+    prefix_cap: int = 3,
     use_cache: bool = True,
     as_json: bool = False,
 ) -> None:
@@ -701,6 +718,8 @@ def _rhymes_multiword(
             min_theme=min_theme,
             word_boundary_leniency=word_boundary_leniency,
             exclude=exclude,
+            diversity=diversity,
+            prefix_cap=prefix_cap,
             use_cache=use_cache,
         )
     except NauticalError as exc:

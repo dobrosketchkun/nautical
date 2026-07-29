@@ -18,6 +18,7 @@ from .errors import NotInitializedError
 from .phonetics import distance as distance_service
 from .search import decoder as multiword_search
 from .search import words as word_search
+from .search.diversity import select_diverse
 from .semantics import theme as theme_service
 from .semantics import vectors as vectors_service
 
@@ -193,6 +194,8 @@ class Nautical:
         word_boundary_leniency: bool = True,
         multi_variant: bool = True,
         exclude: str | frozenset[str] | None = None,
+        diversity: float = 0.35,
+        prefix_cap: int = 3,
         use_cache: bool = True,
     ) -> SearchResponse:
         self._require_db()
@@ -202,7 +205,19 @@ class Nautical:
             if isinstance(exclude, frozenset)
             else exclude_service.resolve_exclusions(exclude, path=self.paths.exclude_path)
         )
-        fetch_limit = max(limit, 100 if multiword else 200) if context_terms else limit
+        # Theme reorders after decode, so diversify after theme on a widened pool.
+        # diversity <= 0 disables both MMR and the prefix cap (pure rank order).
+        active_diversity = diversity if multiword and diversity > 0 else 0.0
+        active_prefix_cap = prefix_cap if active_diversity > 0 else 0
+        diversify_after_theme = bool(active_diversity > 0 and context_terms)
+        decode_diversity = 0.0 if diversify_after_theme else active_diversity
+        decode_prefix_cap = 0 if diversify_after_theme else active_prefix_cap
+
+        fetch_limit = limit
+        if context_terms:
+            fetch_limit = max(limit, 100 if multiword else 200)
+        if diversify_after_theme:
+            fetch_limit = max(fetch_limit, limit * 10, 100)
 
         if multiword:
             cache_key = multiword_search.multiword_cache_key(
@@ -216,6 +231,8 @@ class Nautical:
                 anchor,
                 word_boundary_leniency,
                 exclusions,
+                decode_diversity,
+                decode_prefix_cap,
             )
         else:
             cache_key = word_search.rhymes_cache_key(
@@ -246,6 +263,8 @@ class Nautical:
                 anchor=anchor,
                 word_boundary_leniency=word_boundary_leniency,
                 exclude=exclusions,
+                diversity=decode_diversity,
+                prefix_cap=decode_prefix_cap,
                 use_cache=use_cache,
                 db_path=self.paths.db_path,
                 cache_db_path=self.paths.cache_db_path,
@@ -276,7 +295,15 @@ class Nautical:
                 weight=theme_weight,
                 min_theme=min_theme,
             )
-        candidates = candidates[:limit]
+        if diversify_after_theme:
+            candidates = select_diverse(
+                candidates,
+                limit=limit,
+                diversity=active_diversity,
+                prefix_cap=active_prefix_cap,
+            )
+        else:
+            candidates = candidates[:limit]
         return SearchResponse(
             candidates=candidates,
             mode="multiword" if multiword else "single",

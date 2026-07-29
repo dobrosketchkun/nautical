@@ -134,6 +134,8 @@ def evaluate_pair(
             query,
             limit=fetch_limit,
             anchor=anchor,
+            diversity=0.0,
+            prefix_cap=0,
             use_cache=use_cache,
             db_path=db_path,
             cache_db_path=cache_db_path,

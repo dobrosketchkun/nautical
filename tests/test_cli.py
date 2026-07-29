@@ -38,6 +38,8 @@ def test_rhymes_help_exposes_seed_workflow():
     assert result.exit_code == 0
     assert "--seed" in result.stdout
     assert "--seed-limit" in result.stdout
+    assert "--diversity" in result.stdout
+    assert "--prefix-cap" in result.stdout
 
 
 def test_seed_expansion_and_json_score_contract(monkeypatch):

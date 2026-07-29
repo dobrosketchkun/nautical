@@ -53,6 +53,31 @@ def test_multiword_distinct_ipa(db_path):
         assert len(r.variants) == len(set(r.variants))
 
 
+def test_multiword_default_diversity_limits_prefix(db_path):
+    """U1.2: defaults keep any first word to at most 3 of the top 20."""
+    results = find_multiword("nautical", limit=20, conn=_conn(db_path))
+    assert results
+    counts: dict[str, int] = {}
+    for r in results:
+        first = r.words[0]
+        counts[first] = counts.get(first, 0) + 1
+    assert all(n <= 3 for n in counts.values()), counts
+
+
+def test_multiword_diversity_zero_is_pure_rank_order(db_path):
+    """U1.2: --diversity 0 reproduces pure post-collapse rank order."""
+    pure = find_multiword(
+        "nautical", limit=20, diversity=0.0, prefix_cap=0, conn=_conn(db_path)
+    )
+    also_pure = find_multiword(
+        "nautical", limit=20, diversity=0.0, prefix_cap=3, conn=_conn(db_path)
+    )
+    assert [r.phrase for r in pure] == [r.phrase for r in also_pure]
+    diversified = find_multiword("nautical", limit=20, conn=_conn(db_path))
+    # Defaults should differ from the prefix-heavy pure order on this query.
+    assert [r.phrase for r in diversified] != [r.phrase for r in pure]
+
+
 def test_multiword_discovers_oronyms(db_path):
     # The decoder tiles `nautical` (nɔtəkəl) with real words: high-scoring results
     # include `naught`/`gnaw`/`naughty`-based sound-alikes (`naught a can`,

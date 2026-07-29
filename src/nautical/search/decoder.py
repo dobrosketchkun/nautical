@@ -32,6 +32,7 @@ from ..phonetics.anchor import boundary_surprise, rhyme_tail, segs_from_stored
 from ..phonetics.distance import _stress_similarity, _stress_string, score_segments
 from ..pronounce import enriched_segments, tokenize
 from .normalize import onset_keys
+from .diversity import select_diverse
 from .ranking import ScoreComponents, display_sort_key, merge_variant_forms, rank_base
 
 _segs_from_row = segs_from_stored
@@ -114,8 +115,10 @@ def multiword_cache_key(
     anchor: float,
     word_boundary_leniency: bool = True,
     exclude: frozenset[str] | None = None,
+    diversity: float = 0.35,
+    prefix_cap: int = 3,
 ) -> str:
-    """Cache key for a multi-word decode (phonetic params only)."""
+    """Cache key for a multi-word decode (phonetic + diversity params)."""
     return cache_service.make_key(
         "multiword",
         text,
@@ -129,6 +132,8 @@ def multiword_cache_key(
             "anchor": anchor,
             "word_boundary_leniency": word_boundary_leniency,
             "exclude": sorted(exclude) if exclude else [],
+            "diversity": diversity,
+            "prefix_cap": prefix_cap,
         },
     )
 
@@ -250,6 +255,8 @@ def find_multiword(
     anchor: float = 0.0,
     word_boundary_leniency: bool = True,
     exclude: frozenset[str] | None = None,
+    diversity: float = 0.35,
+    prefix_cap: int = 3,
     use_cache: bool = True,
     db_path: Path | None = None,
     cache_db_path: Path | None = None,
@@ -265,8 +272,12 @@ def find_multiword(
     ``word_boundary_leniency`` makes word-final consonants cheap to drop;
     ``exclude`` bars those words from every tiling.
 
-    Results are cached (keyed on the phonetic params) unless ``use_cache`` is
-    False or an explicit ``conn`` is supplied.
+    ``diversity`` (0 = pure rank order) and ``prefix_cap`` apply presentation-
+    layer selection after IPA collapse so similar prefixes do not monopolize
+    the top rows.
+
+    Results are cached (keyed on the phonetic + diversity params) unless
+    ``use_cache`` is False or an explicit ``conn`` is supplied.
     """
     exclude = exclude or frozenset()
     cache_key = None
@@ -274,6 +285,7 @@ def find_multiword(
         cache_key = multiword_cache_key(
             text, limit, beam_width, cand_per_pos, max_words, min_words,
             strictness, anchor, word_boundary_leniency, exclude,
+            diversity, prefix_cap,
         )
         cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
@@ -423,9 +435,10 @@ def find_multiword(
         if own_conn:
             conn.close()
 
-    results = sorted(best_by_ipa.values(), key=lambda r: r.rank_score, reverse=True)[
-        :limit
-    ]
+    ranked = sorted(best_by_ipa.values(), key=lambda r: r.rank_score, reverse=True)
+    results = select_diverse(
+        ranked, limit=limit, diversity=diversity, prefix_cap=prefix_cap
+    )
 
     if cache_key is not None:
         cache_service.cache_put(
