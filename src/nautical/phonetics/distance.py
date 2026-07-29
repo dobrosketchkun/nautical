@@ -19,6 +19,10 @@ from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
 from .align import Alignment, Seg, align
 
 
+def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
+    return max(low, min(high, value))
+
+
 @dataclass
 class DistanceResult:
     text_a: str
@@ -42,6 +46,27 @@ def _stress_similarity(a: str, b: str) -> float:
     return 1.0 - editdistance.eval(a, b) / longest
 
 
+def similarity_from_cost(
+    total_cost: float,
+    columns: int,
+    weights: ScoringWeights | None = None,
+) -> float:
+    """Hybrid similarity: ``1 - cost / (columns * unrelated_cost_per_col)``."""
+    w = weights if weights is not None else DEFAULT_WEIGHTS
+    cols = max(columns, 1)
+    denom = max(cols * w.unrelated_cost_per_col, 1e-9)
+    return clamp(1.0 - total_cost / denom)
+
+
+def similarity_from_alignment(
+    alignment: Alignment,
+    weights: ScoringWeights | None = None,
+) -> float:
+    return similarity_from_cost(
+        alignment.total_cost, len(alignment.pairs) or 1, weights
+    )
+
+
 def score_segments(
     segs_a: list[Seg],
     segs_b: list[Seg],
@@ -54,15 +79,15 @@ def score_segments(
     Shared by ``phonetic_distance`` and the search reranker so the similarity
     formula lives in one place.
     """
+    w = weights if weights is not None else DEFAULT_WEIGHTS
     alignment = align(
         segs_a,
         segs_b,
         strictness=strictness,
         word_boundary_leniency=word_boundary_leniency,
-        weights=weights if weights is not None else DEFAULT_WEIGHTS,
+        weights=w,
     )
-    columns = len(alignment.pairs) or 1
-    similarity = max(0.0, 1.0 - alignment.total_cost / columns)
+    similarity = similarity_from_alignment(alignment, w)
     stress_similarity = _stress_similarity(
         _stress_string(segs_a), _stress_string(segs_b)
     )

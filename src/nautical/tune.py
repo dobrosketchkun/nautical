@@ -19,10 +19,12 @@ NEGATIVE_LEAK_LAMBDA = 0.5
 # Tunable subset: rank + plausibility + align vowel multipliers.
 # Gap bases stay frozen initially to keep the search space tractable.
 TUNE_BOUNDS: dict[str, tuple[float, float]] = {
-    "stress_weight": (0.0, 0.35),
-    "boundary_weight": (0.0, 0.35),
-    "naturalness_weight": (0.1, 0.6),
-    "word_count_penalty": (0.0, 0.15),
+    "phonetic_weight": (0.25, 0.70),
+    "stress_weight": (0.0, 0.25),
+    "boundary_weight": (0.0, 0.25),
+    "naturalness_weight": (0.1, 0.45),
+    "compactness_weight": (0.0, 0.25),
+    "unrelated_cost_per_col": (0.20, 0.50),
     "vowel_stressed_mult": (1.0, 2.5),
     "vowel_unstressed_mult": (0.1, 0.8),
     "freq_geom_weight": (0.15, 0.6),
@@ -67,6 +69,18 @@ def _sample_weights(rng: random.Random, base: ScoringWeights) -> ScoringWeights:
         updates["freq_geom_weight"] = fg / total
         updates["pos_plaus_weight"] = pp / total
         updates["function_ok_weight"] = fo / total
+    # Renormalize convex rank weights (multi-word five-way) to sum ≈ 1.
+    rank_keys = (
+        "phonetic_weight",
+        "stress_weight",
+        "boundary_weight",
+        "naturalness_weight",
+        "compactness_weight",
+    )
+    rank_total = sum(updates[k] for k in rank_keys)
+    if rank_total > 0:
+        for k in rank_keys:
+            updates[k] = updates[k] / rank_total
     return base.with_updates(**updates)
 
 

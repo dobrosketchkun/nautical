@@ -30,7 +30,7 @@ from ..phonetics.align import (
     alignment_to_dict,
 )
 from ..phonetics.anchor import boundary_surprise, rhyme_tail, segs_from_stored
-from ..phonetics.distance import _stress_similarity, _stress_string, score_segments
+from ..phonetics.distance import score_segments
 from ..pronounce import enriched_segments, tokenize
 from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
 from .normalize import onset_keys
@@ -440,7 +440,6 @@ def find_multiword(
 
         nodes[n].sort(key=lambda e: e[0])
 
-        target_stress = _stress_string(target)
         target_tail = rhyme_tail(target) if anchor > 0.0 else []
 
         # Collapse tilings that share the same sound onto one row; keep alternate
@@ -464,7 +463,14 @@ def find_multiword(
             )
 
             segs = [s for tr in steps for s in tr.segs]
-            similarity = max(0.0, 1.0 - entry[0] / n)
+            full_similarity, stress_similarity, global_alignment = score_segments(
+                target,
+                segs,
+                strictness=strictness,
+                word_boundary_leniency=word_boundary_leniency,
+                weights=w,
+            )
+            similarity = full_similarity
             if anchor > 0.0:
                 tail_similarity, _, _ = score_segments(
                     target_tail,
@@ -473,7 +479,9 @@ def find_multiword(
                     word_boundary_leniency=word_boundary_leniency,
                     weights=w,
                 )
-                similarity = (1.0 - anchor) * similarity + anchor * tail_similarity
+                similarity = (1.0 - anchor) * full_similarity + anchor * tail_similarity
+            else:
+                tail_similarity = full_similarity
             naturalness, freq_geom, pos_plaus, func_ok = phrase_naturalness(
                 [tr.frequency for tr in steps],
                 [tr.pos_tag for tr in steps],
@@ -482,14 +490,6 @@ def find_multiword(
                 weights=w,
             )
             num_words = len(words)
-            stress_similarity = _stress_similarity(_stress_string(segs), target_stress)
-            _, _, global_alignment = score_segments(
-                target,
-                segs,
-                strictness=strictness,
-                word_boundary_leniency=word_boundary_leniency,
-                weights=w,
-            )
             surprise = boundary_surprise(global_alignment)
             base_score = rank_base(
                 similarity,
@@ -512,8 +512,8 @@ def find_multiword(
                 alignment=global_alignment,
                 scores=ScoreComponents(
                     phonetic_similarity=similarity,
-                    full_similarity=similarity,
-                    tail_similarity=tail_similarity if anchor > 0.0 else similarity,
+                    full_similarity=full_similarity,
+                    tail_similarity=tail_similarity,
                     stress_similarity=stress_similarity,
                     naturalness=naturalness,
                     freq_naturalness=freq_geom,

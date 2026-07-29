@@ -1,6 +1,6 @@
-"""Externalized scoring / alignment weights (U3).
+"""Externalized scoring / alignment weights (U3 + U2).
 
-Defaults match the previous hardcoded module constants. A JSON file in the
+Defaults match the calibrated module constants. A JSON file in the
 data directory (or ``--weights``) can override them without editing source.
 """
 
@@ -18,12 +18,17 @@ WEIGHTS_FILENAME = "scoring_weights.json"
 class ScoringWeights:
     """Every provisional constant that affects ranking or alignment cost."""
 
-    # Ranking (rank_base / theme default)
+    # Convex rank_base weights (renormalized at use; multi defaults sum to 1)
+    phonetic_weight: float = 0.45
     stress_weight: float = 0.10
     boundary_weight: float = 0.10
-    naturalness_weight: float = 0.35
-    word_count_penalty: float = 0.05
+    naturalness_weight: float = 0.25
+    compactness_weight: float = 0.10
     theme_weight_default: float = 0.5
+
+    # Hybrid similarity: cost / (columns * unrelated_cost_per_col)
+    # Measured mean unrelated cost/col ≈ 0.24; 0.30 keeps unrelated sim < 0.4.
+    unrelated_cost_per_col: float = 0.30
 
     # Alignment substitution / gap / strictness
     vowel_stressed_mult: float = 1.6
@@ -50,7 +55,11 @@ class ScoringWeights:
     @classmethod
     def from_dict(cls, data: dict) -> "ScoringWeights":
         known = {f.name for f in fields(cls)}
-        return cls(**{k: float(v) for k, v in data.items() if k in known})
+        cleaned = {k: float(v) for k, v in data.items() if k in known}
+        # Pre-U2 JSON used word_count_penalty; map to compactness_weight.
+        if "compactness_weight" not in cleaned and "word_count_penalty" in data:
+            cleaned["compactness_weight"] = float(data["word_count_penalty"])
+        return cls(**cleaned)
 
     def weights_hash(self) -> str:
         """Stable short digest for cache keys."""

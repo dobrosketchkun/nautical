@@ -1,8 +1,7 @@
 """Shared, decomposed ranking model for word and phrase candidates.
 
-The weights in this module are deliberately centralized and provisional. Phase 9
-wires every search mode to the same score contract; calibrating the values
-against a larger judged corpus is deferred.
+U2: ``rank_base`` is a convex combination (weights renormalized to sum to 1)
+so ``rank_score`` stays in ``[0, 1]``. Calibrate magnitudes via U3 ``nautical tune``.
 """
 
 from __future__ import annotations
@@ -15,7 +14,10 @@ from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
 STRESS_WEIGHT = DEFAULT_WEIGHTS.stress_weight
 BOUNDARY_WEIGHT = DEFAULT_WEIGHTS.boundary_weight
 NATURALNESS_WEIGHT = DEFAULT_WEIGHTS.naturalness_weight
-WORD_COUNT_PENALTY = DEFAULT_WEIGHTS.word_count_penalty
+COMPACTNESS_WEIGHT = DEFAULT_WEIGHTS.compactness_weight
+PHONETIC_WEIGHT = DEFAULT_WEIGHTS.phonetic_weight
+# Legacy name kept for imports that still expect it.
+WORD_COUNT_PENALTY = DEFAULT_WEIGHTS.compactness_weight
 
 
 @dataclass
@@ -44,6 +46,17 @@ class ScoreComponents:
         return cls(**{k: v for k, v in data.items() if k in known})
 
 
+def _renormalize(parts: list[tuple[float, float]]) -> float:
+    """Weighted sum of ``(weight, value)`` pairs after renormalizing weights to 1."""
+    total_w = sum(max(0.0, w) for w, _ in parts)
+    if total_w <= 0.0:
+        # Degenerate: equal blend of the values that were supplied.
+        if not parts:
+            return 0.0
+        return sum(v for _, v in parts) / len(parts)
+    return sum(max(0.0, w) * v for w, v in parts) / total_w
+
+
 def rank_base(
     phonetic_similarity: float,
     stress_similarity: float,
@@ -53,21 +66,30 @@ def rank_base(
     num_words: int = 1,
     weights: ScoringWeights | None = None,
 ) -> float:
-    """Return the provisional non-semantic ordering score.
+    """Return a convex ordering score in ``[0, 1]``.
 
-    Multi-word results retain the Phase 4 naturalness and word-count terms.
-    Stress and boundary movement are now real ranking signals in both modes.
+    Single-word (no naturalness): blend of phonetic / stress / boundary.
+    Multi-word: those plus naturalness and compactness ``1/num_words``.
     """
     w = weights if weights is not None else DEFAULT_WEIGHTS
-    score = (
-        phonetic_similarity
-        + w.stress_weight * stress_similarity
-        + w.boundary_weight * boundary_surprise
+    if naturalness is None:
+        return _renormalize(
+            [
+                (w.phonetic_weight, phonetic_similarity),
+                (w.stress_weight, stress_similarity),
+                (w.boundary_weight, boundary_surprise),
+            ]
+        )
+    compactness = 1.0 / max(num_words, 1)
+    return _renormalize(
+        [
+            (w.phonetic_weight, phonetic_similarity),
+            (w.stress_weight, stress_similarity),
+            (w.boundary_weight, boundary_surprise),
+            (w.naturalness_weight, naturalness),
+            (w.compactness_weight, compactness),
+        ]
     )
-    if naturalness is not None:
-        score += w.naturalness_weight * naturalness
-        score -= w.word_count_penalty * num_words
-    return score
 
 
 def apply_context_score(base_score: float, theme_fit: float, weight: float) -> float:

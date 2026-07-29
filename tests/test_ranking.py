@@ -49,10 +49,20 @@ def test_stress_and_boundary_are_real_base_ranking_signals():
     baseline = rank_base(0.8, 0.0, 0.0)
     assert rank_base(0.8, 1.0, 0.0) > baseline
     assert rank_base(0.8, 0.0, 1.0) > baseline
+    assert 0.0 <= baseline <= 1.0
+    assert rank_base(0.8, 1.0, 1.0, naturalness=0.5, num_words=3) <= 1.0
 
 
 def test_context_blends_with_complete_base_score():
-    assert apply_context_score(1.4, -1.0, 0.2) == pytest.approx(1.12)
+    assert apply_context_score(0.8, -1.0, 0.2) == pytest.approx(0.64)
+
+
+def test_convex_rank_never_exceeds_one():
+    perfect = rank_base(1.0, 1.0, 1.0, naturalness=1.0, num_words=1)
+    assert perfect == pytest.approx(1.0)
+    assert rank_base(0.0, 0.0, 0.0) == pytest.approx(0.0)
+    multi = rank_base(1.0, 1.0, 1.0, naturalness=1.0, num_words=5)
+    assert 0.0 <= multi <= 1.0
 
 
 def test_display_sort_key_prefers_frequency_then_length_then_alpha():
