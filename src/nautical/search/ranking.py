@@ -7,7 +7,7 @@ against a larger judged corpus is deferred.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 
 
 STRESS_WEIGHT = 0.10
@@ -26,6 +26,9 @@ class ScoreComponents:
     stress_similarity: float
     boundary_surprise: float = 0.0
     naturalness: float | None = None
+    freq_naturalness: float | None = None
+    pos_plausibility: float | None = None
+    function_ok: float | None = None
     theme_fit: float | None = None
     base_score: float = 0.0
     rank_score: float = 0.0
@@ -35,7 +38,8 @@ class ScoreComponents:
 
     @classmethod
     def from_dict(cls, data: dict) -> "ScoreComponents":
-        return cls(**data)
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: v for k, v in data.items() if k in known})
 
 
 def rank_base(

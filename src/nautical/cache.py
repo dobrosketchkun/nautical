@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .config import CACHE_DB_PATH, ensure_data_dir
 
-_CACHE_FORMAT_VERSION = "u1.3-v1"
+_CACHE_FORMAT_VERSION = "u1.4-v1"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS query_cache (

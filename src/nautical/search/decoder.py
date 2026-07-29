@@ -14,7 +14,6 @@ cand_per_pos small alignments plus cheap beam bookkeeping.
 
 from __future__ import annotations
 
-import math
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,6 +33,7 @@ from ..phonetics.distance import _stress_similarity, _stress_string, score_segme
 from ..pronounce import enriched_segments, tokenize
 from .normalize import onset_keys
 from .diversity import select_diverse
+from .plausibility import load_pos_lm, phrase_naturalness
 from .ranking import ScoreComponents, display_sort_key, merge_variant_forms, rank_base
 
 _segs_from_row = segs_from_stored
@@ -149,17 +149,11 @@ class _Transition:
     word: str
     frequency: float
     quality: float
+    pos_tag: str
     length: int  # target segments consumed
     cost: float
     segs: list[Seg]
     alignment: Alignment
-
-
-def _freq_score(frequency: float) -> float:
-    """Map a wordfreq value to a [0, 1] naturalness contribution."""
-    if frequency <= 0:
-        return 0.0
-    return max(0.0, min(1.0, (math.log10(frequency) + 7.0) / 7.0))
 
 
 def _position_transitions(
@@ -181,7 +175,8 @@ def _position_transitions(
 
     placeholders = ",".join("?" * len(keys))
     rows = conn.execute(
-        f"SELECT l.written_form, l.frequency, l.quality, p.arpabet, p.ipa_segments "
+        f"SELECT l.written_form, l.frequency, l.quality, l.pos_tag, "
+        f"p.arpabet, p.ipa_segments "
         f"FROM decode_onset d "
         f"JOIN pronunciation p ON p.id = d.pronunciation_id "
         f"JOIN lexeme l ON l.id = p.lexeme_id "
@@ -191,7 +186,7 @@ def _position_transitions(
     ).fetchall()
 
     transitions: list[_Transition] = []
-    for written_form, frequency, quality, arpabet, ipa_segments in rows:
+    for written_form, frequency, quality, pos_tag, arpabet, ipa_segments in rows:
         if written_form in skip_words:
             continue
         cand_segs = _segs_from_row(arpabet, ipa_segments)
@@ -213,6 +208,7 @@ def _position_transitions(
                     word=written_form,
                     frequency=frequency or 0.0,
                     quality=float(quality or 0.0),
+                    pos_tag=pos_tag or "",
                     length=length,
                     cost=alignment.total_cost,
                     segs=cand_segs,
@@ -312,6 +308,7 @@ def find_multiword(
 
         input_tokens = tokenize(text)
         skip_words = {text.strip().lower()} | set(exclude)
+        pos_lm = load_pos_lm(conn)
 
         # nodes[n] holds completed tilings; there are combinatorially many, so it
         # is capped (by cost) during the DP to bound memory. Final ranking also
@@ -380,7 +377,12 @@ def find_multiword(
                     word_boundary_leniency=word_boundary_leniency,
                 )
                 similarity = (1.0 - anchor) * similarity + anchor * tail_similarity
-            naturalness = sum(_freq_score(tr.frequency) for tr in steps) / len(steps)
+            naturalness, freq_geom, pos_plaus, func_ok = phrase_naturalness(
+                [tr.frequency for tr in steps],
+                [tr.pos_tag for tr in steps],
+                pos_lm,
+                words=[tr.word for tr in steps],
+            )
             num_words = len(words)
             stress_similarity = _stress_similarity(_stress_string(segs), target_stress)
             _, _, global_alignment = score_segments(
@@ -414,6 +416,9 @@ def find_multiword(
                     tail_similarity=tail_similarity if anchor > 0.0 else similarity,
                     stress_similarity=stress_similarity,
                     naturalness=naturalness,
+                    freq_naturalness=freq_geom,
+                    pos_plausibility=pos_plaus,
+                    function_ok=func_ok,
                     boundary_surprise=surprise,
                     base_score=base_score,
                     rank_score=base_score,

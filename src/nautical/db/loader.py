@@ -21,6 +21,7 @@ from ..phonetics.anchor import rhyme_tail, segs_from_stored
 from ..phonology.arpabet import arpabet_to_ipa, stress_pattern, syllable_count
 from ..search.index import segment_ngrams
 from ..search.normalize import onset_keys
+from ..search.plausibility import write_pos_lm
 from .quality import (
     DEFAULT_MIN_QUALITY,
     batch_pos_tag,
@@ -51,6 +52,10 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
     ngram_count = conn.execute("SELECT COUNT(*) FROM phoneme_ngram").fetchone()[0]
     onset_count = conn.execute("SELECT COUNT(*) FROM decode_onset").fetchone()[0]
     rhyme_count = conn.execute("SELECT COUNT(*) FROM rhyme_ngram").fetchone()[0]
+    pos_lm_count = conn.execute("SELECT COUNT(*) FROM pos_lm").fetchone()[0]
+    pos_lm_tri = conn.execute(
+        "SELECT COUNT(*) FROM pos_lm WHERE order_n = 3"
+    ).fetchone()[0]
 
     meta = {
         "schema_version": SCHEMA_VERSION,
@@ -63,6 +68,9 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
         "phoneme_ngram_count": str(ngram_count),
         "decode_onset_count": str(onset_count),
         "rhyme_ngram_count": str(rhyme_count),
+        "pos_lm_count": str(pos_lm_count),
+        "pos_lm_trigrams": str(pos_lm_tri),
+        "pos_lm_source": "treebank",
     }
     conn.executemany(
         "INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", meta.items()
@@ -75,6 +83,7 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
         "phoneme_ngram_count": ngram_count,
         "decode_onset_count": onset_count,
         "rhyme_ngram_count": rhyme_count,
+        "pos_lm_trigrams": pos_lm_tri,
     }
 
 
@@ -253,6 +262,9 @@ def build_db(force: bool = False, db_path: Path | None = None) -> dict[str, int]
         conn.commit()
 
         _annotate_quality(conn)
+        conn.commit()
+
+        write_pos_lm(conn)
         conn.commit()
 
         _build_ngram_index(conn)

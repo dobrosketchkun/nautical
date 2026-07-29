@@ -770,6 +770,15 @@ def _rhymes_multiword(
                         "similarity": round(r.similarity, 4),
                         "stress_similarity": round(r.stress_similarity, 4),
                         "naturalness": round(r.naturalness, 4),
+                        "freq_naturalness": round(r.scores.freq_naturalness, 4)
+                        if r.scores.freq_naturalness is not None
+                        else None,
+                        "pos_plausibility": round(r.scores.pos_plausibility, 4)
+                        if r.scores.pos_plausibility is not None
+                        else None,
+                        "function_ok": round(r.scores.function_ok, 4)
+                        if r.scores.function_ok is not None
+                        else None,
                         "boundary_surprise": round(r.boundary_surprise, 4),
                         "num_words": r.num_words,
                         "ipa": r.ipa,

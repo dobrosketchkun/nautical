@@ -61,3 +61,13 @@ CREATE TABLE IF NOT EXISTS rhyme_ngram (
 );
 
 CREATE INDEX IF NOT EXISTS idx_rhyme_ngram ON rhyme_ngram(ngram);
+
+-- Penn-tag POS n-gram LM for multi-word phrase plausibility (U1.4).
+-- Trained from NLTK Treebank at db build; queried with trigram→bigram→unigram backoff.
+CREATE TABLE IF NOT EXISTS pos_lm (
+    order_n  INTEGER NOT NULL,   -- 1, 2, or 3
+    context  TEXT NOT NULL,      -- "" | "DT" | "DT TO"
+    tag      TEXT NOT NULL,
+    log_prob REAL NOT NULL,
+    PRIMARY KEY (order_n, context, tag)
+);

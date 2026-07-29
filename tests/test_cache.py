@@ -92,6 +92,9 @@ def test_multiword_result_roundtrip_preserves_chunks(db_path, cache_db):
         assert back.score == pytest.approx(orig.score)
         assert back.boundary_surprise == pytest.approx(orig.boundary_surprise)
         assert back.variants == orig.variants
+        assert back.scores.freq_naturalness == pytest.approx(orig.scores.freq_naturalness)
+        assert back.scores.pos_plausibility == pytest.approx(orig.scores.pos_plausibility)
+        assert back.scores.function_ok == pytest.approx(orig.scores.function_ok)
         assert back.alignment.pretty() == orig.alignment.pretty()
         assert [w for w, _ in back.chunks] == [w for w, _ in orig.chunks]
         for (_, a_back), (_, a_orig) in zip(back.chunks, orig.chunks):
