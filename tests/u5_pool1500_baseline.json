@@ -1,0 +1,8 @@
+{
+  "note": "Pre-U5 COUNT-overlap retrieval on schema v7; single-word positive pairs, no theme.",
+  "pool": 1500,
+  "total": 22,
+  "hits": 14,
+  "hit_rate": 0.6363636363636364,
+  "mrr": 0.2676037926037926
+}

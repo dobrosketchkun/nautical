@@ -29,15 +29,19 @@ CREATE TABLE IF NOT EXISTS pronunciation (
     syllable_count INTEGER,
     ipa            TEXT,                 -- normalized IPA string, e.g. "nɔtɪkəl"
     ipa_segments   TEXT,                 -- space-joined IPA segments, e.g. "n ɔ t ɪ k ə l"
-    source         TEXT
+    source         TEXT,
+    ngram_count        INTEGER NOT NULL DEFAULT 0,
+    rhyme_ngram_count  INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_pron_lexeme ON pronunciation(lexeme_id);
 
--- Phoneme n-gram inverted index for generous candidate retrieval (Phase 3).
+-- Phoneme n-gram inverted index for generous candidate retrieval (Phase 3 / U5).
+-- Binary TF: one row per distinct (ngram, pronunciation).
 CREATE TABLE IF NOT EXISTS phoneme_ngram (
     ngram            TEXT NOT NULL,
-    pronunciation_id INTEGER NOT NULL REFERENCES pronunciation(id)
+    pronunciation_id INTEGER NOT NULL REFERENCES pronunciation(id),
+    PRIMARY KEY (ngram, pronunciation_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_phoneme_ngram ON phoneme_ngram(ngram);
@@ -52,15 +56,35 @@ CREATE TABLE IF NOT EXISTS decode_onset (
 
 CREATE INDEX IF NOT EXISTS idx_decode_onset ON decode_onset(onset_key);
 
--- Rhyme-signature n-gram index for tail-anchored retrieval (Phase 5).
+-- Rhyme-signature n-gram index for tail-anchored retrieval (Phase 5 / U5).
 -- Mirrors phoneme_ngram, but built only from each pronunciation's rhyme tail
 -- (last stressed vowel to end), so end-rhymes can be retrieved directly.
 CREATE TABLE IF NOT EXISTS rhyme_ngram (
     ngram            TEXT NOT NULL,
-    pronunciation_id INTEGER NOT NULL REFERENCES pronunciation(id)
+    pronunciation_id INTEGER NOT NULL REFERENCES pronunciation(id),
+    PRIMARY KEY (ngram, pronunciation_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_rhyme_ngram ON rhyme_ngram(ngram);
+
+-- Document frequency + precomputed IDF for length-normalized retrieval (U5).
+-- kind: 'full' | 'rhyme'; idf = log((N+1)/(df+1)) + 1
+CREATE TABLE IF NOT EXISTS ngram_df (
+    kind  TEXT NOT NULL,
+    ngram TEXT NOT NULL,
+    df    INTEGER NOT NULL,
+    idf   REAL NOT NULL,
+    PRIMARY KEY (kind, ngram)
+);
+
+-- Stressed-vowel skeleton for meter-compatible recall (U5).
+CREATE TABLE IF NOT EXISTS stress_skeleton (
+    skeleton         TEXT NOT NULL,
+    pronunciation_id INTEGER NOT NULL REFERENCES pronunciation(id),
+    PRIMARY KEY (skeleton, pronunciation_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_stress_skeleton ON stress_skeleton(skeleton);
 
 -- Penn-tag POS n-gram LM for multi-word phrase plausibility (U1.4).
 -- Trained from NLTK Treebank at db build; queried with trigram→bigram→unigram backoff.

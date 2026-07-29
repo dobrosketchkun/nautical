@@ -167,6 +167,7 @@ def evaluate_pair(
     db_path: Path | None = None,
     cache_db_path: Path | None = None,
     weights: ScoringWeights | None = None,
+    pool: int = 1500,
 ) -> EvalRow:
     """Run one pair through the engine and locate the expected match's rank."""
     w = weights if weights is not None else DEFAULT_WEIGHTS
@@ -191,6 +192,7 @@ def evaluate_pair(
             anchor=anchor,
             diversity=0.0,
             prefix_cap=0,
+            cand_per_pos=pool,
             use_cache=use_cache,
             db_path=db_path,
             cache_db_path=cache_db_path,
@@ -203,6 +205,7 @@ def evaluate_pair(
         results, _ = word_search.find_rhymes(
             query,
             limit=fetch_limit,
+            pool=pool,
             anchor=anchor,
             use_cache=use_cache,
             db_path=db_path,
@@ -302,6 +305,7 @@ def run_eval(
     cache_db_path: Path | None = None,
     weights: ScoringWeights | None = None,
     include_diversity: bool = True,
+    pool: int = 1500,
 ) -> EvalReport:
     """Evaluate every pair and return per-pair rows plus aggregates."""
     w = weights if weights is not None else DEFAULT_WEIGHTS
@@ -317,6 +321,7 @@ def run_eval(
                 db_path=db_path,
                 cache_db_path=cache_db_path,
                 weights=w,
+                pool=pool,
             )
         )
     if include_diversity and any(p.get("mode") == "multiword" for p in pairs):

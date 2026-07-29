@@ -6,7 +6,7 @@ from pathlib import Path
 
 from platformdirs import user_data_dir
 
-SCHEMA_VERSION = "7"
+SCHEMA_VERSION = "8"
 GLOVE_DIM = 300
 
 # The zip bundles all dimensions (50/100/200/300d); we extract only the one we

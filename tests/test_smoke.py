@@ -34,5 +34,5 @@ def test_stats_roundtrip(tmp_path):
     db_path = tmp_path / "test_nautical.db"
     loader.build_db(force=True, db_path=db_path)
     info = loader.get_stats(db_path=db_path)
-    assert info["schema_version"] == "5"
+    assert info["schema_version"] == "8"
     assert int(info["lexeme_count"]) > 100_000

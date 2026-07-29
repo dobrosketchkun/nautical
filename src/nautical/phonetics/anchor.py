@@ -63,6 +63,11 @@ def rhyme_tail(segs: list[Seg]) -> list[Seg]:
     return list(segs[start:])
 
 
+def stress_skeleton_key(segs: list[Seg]) -> str:
+    """Join stressed-vowel IPA (primary/secondary) into a meter skeleton key."""
+    return "\u001f".join(s.ipa for s in segs if s.is_vowel and s.stressed)
+
+
 def _internal_boundary_columns(alignment: Alignment, side: str) -> set[int]:
     """Return aligned columns after which ``side`` has an internal word boundary."""
     attr = "src" if side == "src" else "tgt"

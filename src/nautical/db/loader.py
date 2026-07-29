@@ -9,6 +9,7 @@ signals (zipf, POS, string flags, IPA-variant, derived quality) once at build.
 
 from __future__ import annotations
 
+import math
 import sqlite3
 import time
 from collections import defaultdict
@@ -17,7 +18,7 @@ from pathlib import Path
 
 from ..config import DB_PATH, SCHEMA_VERSION, ensure_data_dir
 from ..data.sources import get_frequency, get_zipf, iter_lexemes
-from ..phonetics.anchor import rhyme_tail, segs_from_stored
+from ..phonetics.anchor import rhyme_tail, segs_from_stored, stress_skeleton_key
 from ..phonology.arpabet import arpabet_to_ipa, stress_pattern, syllable_count
 from ..search.index import segment_ngrams
 from ..search.normalize import onset_keys
@@ -56,6 +57,8 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
     pos_lm_tri = conn.execute(
         "SELECT COUNT(*) FROM pos_lm WHERE order_n = 3"
     ).fetchone()[0]
+    ngram_df_count = conn.execute("SELECT COUNT(*) FROM ngram_df").fetchone()[0]
+    skeleton_count = conn.execute("SELECT COUNT(*) FROM stress_skeleton").fetchone()[0]
 
     meta = {
         "schema_version": SCHEMA_VERSION,
@@ -68,6 +71,8 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
         "phoneme_ngram_count": str(ngram_count),
         "decode_onset_count": str(onset_count),
         "rhyme_ngram_count": str(rhyme_count),
+        "ngram_df_count": str(ngram_df_count),
+        "stress_skeleton_count": str(skeleton_count),
         "pos_lm_count": str(pos_lm_count),
         "pos_lm_trigrams": str(pos_lm_tri),
         "pos_lm_source": "treebank",
@@ -83,23 +88,51 @@ def _write_meta(conn: sqlite3.Connection) -> dict[str, int]:
         "phoneme_ngram_count": ngram_count,
         "decode_onset_count": onset_count,
         "rhyme_ngram_count": rhyme_count,
+        "ngram_df_count": ngram_df_count,
+        "stress_skeleton_count": skeleton_count,
         "pos_lm_trigrams": pos_lm_tri,
     }
 
 
+def _distinct_ngrams(segments: list[str]) -> list[str]:
+    """Binary TF: preserve first-seen order, drop repeats within one doc."""
+    return list(dict.fromkeys(segment_ngrams(segments)))
+
+
+def _populate_ngram_df(conn: sqlite3.Connection, kind: str, table: str, n: int) -> None:
+    """Aggregate document frequency and store IDF for one n-gram table."""
+    rows = []
+    for ngram, df in conn.execute(
+        f"SELECT ngram, COUNT(*) FROM {table} GROUP BY ngram"
+    ):
+        idf = math.log((n + 1) / (df + 1)) + 1.0
+        rows.append((kind, ngram, int(df), float(idf)))
+    conn.executemany(
+        "INSERT INTO ngram_df(kind, ngram, df, idf) VALUES (?, ?, ?, ?)",
+        rows,
+    )
+
+
 def _build_ngram_index(conn: sqlite3.Connection) -> None:
-    """Populate phoneme_ngram from each pronunciation's IPA segments."""
+    """Populate phoneme_ngram (deduped) and per-pronunciation gram counts."""
     rows = conn.execute(
         "SELECT id, ipa_segments FROM pronunciation"
     ).fetchall()
     ngram_rows = []
+    counts: list[tuple[int, int]] = []
     for pron_id, ipa_segments in rows:
         segments = ipa_segments.split(" ") if ipa_segments else []
-        for gram in segment_ngrams(segments):
+        grams = _distinct_ngrams(segments)
+        counts.append((len(grams), pron_id))
+        for gram in grams:
             ngram_rows.append((gram, pron_id))
     conn.executemany(
         "INSERT INTO phoneme_ngram(ngram, pronunciation_id) VALUES (?, ?)",
         ngram_rows,
+    )
+    conn.executemany(
+        "UPDATE pronunciation SET ngram_count = ? WHERE id = ?",
+        counts,
     )
 
 
@@ -113,14 +146,38 @@ def _build_rhyme_index(conn: sqlite3.Connection) -> None:
         "SELECT id, arpabet, ipa_segments FROM pronunciation"
     ).fetchall()
     rhyme_rows = []
+    counts: list[tuple[int, int]] = []
     for pron_id, arpabet, ipa_segments in rows:
         segs = segs_from_stored(arpabet, ipa_segments)
         tail = [s.ipa for s in rhyme_tail(segs)]
-        for gram in segment_ngrams(tail):
+        grams = _distinct_ngrams(tail)
+        counts.append((len(grams), pron_id))
+        for gram in grams:
             rhyme_rows.append((gram, pron_id))
     conn.executemany(
         "INSERT INTO rhyme_ngram(ngram, pronunciation_id) VALUES (?, ?)",
         rhyme_rows,
+    )
+    conn.executemany(
+        "UPDATE pronunciation SET rhyme_ngram_count = ? WHERE id = ?",
+        counts,
+    )
+
+
+def _build_stress_skeleton_index(conn: sqlite3.Connection) -> None:
+    """Index each pronunciation by its stressed-vowel IPA skeleton."""
+    rows = conn.execute(
+        "SELECT id, arpabet, ipa_segments FROM pronunciation"
+    ).fetchall()
+    skeleton_rows = []
+    for pron_id, arpabet, ipa_segments in rows:
+        segs = segs_from_stored(arpabet, ipa_segments)
+        key = stress_skeleton_key(segs)
+        if key:
+            skeleton_rows.append((key, pron_id))
+    conn.executemany(
+        "INSERT INTO stress_skeleton(skeleton, pronunciation_id) VALUES (?, ?)",
+        skeleton_rows,
     )
 
 
@@ -220,6 +277,8 @@ def build_db(force: bool = False, db_path: Path | None = None) -> dict[str, int]
 
     conn = sqlite3.connect(db_path)
     try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         _load_schema(conn)
 
         lexemes = list(iter_lexemes())
@@ -269,7 +328,14 @@ def build_db(force: bool = False, db_path: Path | None = None) -> dict[str, int]
 
         _build_ngram_index(conn)
         _build_rhyme_index(conn)
+        _build_stress_skeleton_index(conn)
         _build_decode_index(conn)
+
+        n_pron = conn.execute("SELECT COUNT(*) FROM pronunciation").fetchone()[0]
+        _populate_ngram_df(conn, "full", "phoneme_ngram", n_pron)
+        _populate_ngram_df(conn, "rhyme", "rhyme_ngram", n_pron)
+
+        conn.execute("ANALYZE")
 
         stats = _write_meta(conn)
         conn.commit()

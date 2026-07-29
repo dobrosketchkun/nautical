@@ -18,7 +18,7 @@ from ..phonetics.anchor import (
 )
 from ..pronounce import enriched_segment_variants, enriched_segments, tokenize
 from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
-from .index import candidate_ids, tail_candidate_ids
+from .index import candidate_ids, skeleton_candidate_ids, tail_candidate_ids
 from .ranking import ScoreComponents, display_sort_key, merge_variant_forms, rank_base
 
 # Backwards-compatible alias (decoder.py imports this name).
@@ -199,12 +199,14 @@ def find_rhymes(
 
         # Union the candidate pool across every query variant.
         ids: set[int] = set()
+        skeleton_pool = max(1, pool // 2)
         for target_segs in target_variants:
             target_ipa = [s.ipa for s in target_segs]
             ids.update(candidate_ids(conn, target_ipa, pool))
             if anchor > 0.0:
                 tail_ipa = [s.ipa for s in rhyme_tail(target_segs)]
                 ids.update(tail_candidate_ids(conn, tail_ipa, pool))
+            ids.update(skeleton_candidate_ids(conn, target_segs, skeleton_pool))
         if not ids:
             return [], False
 
