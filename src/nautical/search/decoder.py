@@ -31,6 +31,7 @@ from ..phonetics.align import (
 from ..phonetics.anchor import boundary_surprise, rhyme_tail, segs_from_stored
 from ..phonetics.distance import _stress_similarity, _stress_string, score_segments
 from ..pronounce import enriched_segments, tokenize
+from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
 from .normalize import onset_keys
 from .diversity import select_diverse
 from .plausibility import load_pos_lm, phrase_naturalness
@@ -122,8 +123,12 @@ def multiword_cache_key(
     diversity: float = 0.35,
     prefix_cap: int = 3,
     min_quality: float = DEFAULT_MIN_QUALITY,
+    weights: ScoringWeights | None = None,
+    db_path: Path | None = None,
 ) -> str:
-    """Cache key for a multi-word decode (phonetic + diversity + quality params)."""
+    """Cache key for a multi-word decode (phonetic + diversity + quality + weights)."""
+    w = weights if weights is not None else DEFAULT_WEIGHTS
+    lex = cache_service.lexicon_identity(db_path)
     return cache_service.make_key(
         "multiword",
         text,
@@ -140,6 +145,9 @@ def multiword_cache_key(
             "diversity": diversity,
             "prefix_cap": prefix_cap,
             "min_quality": min_quality,
+            "weights_hash": w.weights_hash(),
+            "schema_version": lex["schema_version"],
+            "built_at": lex["built_at"],
         },
     )
 
@@ -165,8 +173,10 @@ def _position_transitions(
     skip_words: set[str],
     word_boundary_leniency: bool = True,
     min_quality: float = DEFAULT_MIN_QUALITY,
+    weights: ScoringWeights | None = None,
 ) -> list[_Transition]:
     """Candidate word transitions starting at target position ``i``."""
+    w = weights if weights is not None else DEFAULT_WEIGHTS
     n = len(target)
     target_ipa = [s.ipa for s in target]
     keys = onset_keys(target_ipa[i : i + 2])
@@ -200,8 +210,11 @@ def _position_transitions(
             if length < 1 or i + length > n:
                 continue
             alignment = align(
-                cand_segs, target[i : i + length], strictness=strictness,
+                cand_segs,
+                target[i : i + length],
+                strictness=strictness,
                 word_boundary_leniency=word_boundary_leniency,
+                weights=w,
             )
             transitions.append(
                 _Transition(
@@ -262,11 +275,12 @@ def find_multiword(
     exclude: frozenset[str] | None = None,
     diversity: float = 0.35,
     prefix_cap: int = 3,
-    min_quality: float = DEFAULT_MIN_QUALITY,
+    min_quality: float | None = None,
     use_cache: bool = True,
     db_path: Path | None = None,
     cache_db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
+    weights: ScoringWeights | None = None,
 ) -> list[MultiwordResult]:
     """Return ranked multi-word sequences that sound like ``text``.
 
@@ -282,16 +296,31 @@ def find_multiword(
     layer selection after IPA collapse so similar prefixes do not monopolize
     the top rows. ``min_quality`` gates the decode inventory (0 = full lexicon).
 
-    Results are cached (keyed on the phonetic + diversity + quality params)
+    Results are cached (keyed on the phonetic + diversity + quality + weights)
     unless ``use_cache`` is False or an explicit ``conn`` is supplied.
     """
+    w = weights if weights is not None else DEFAULT_WEIGHTS
+    if min_quality is None:
+        min_quality = w.min_quality
     exclude = exclude or frozenset()
     cache_key = None
     if use_cache and conn is None:
         cache_key = multiword_cache_key(
-            text, limit, beam_width, cand_per_pos, max_words, min_words,
-            strictness, anchor, word_boundary_leniency, exclude,
-            diversity, prefix_cap, min_quality,
+            text,
+            limit,
+            beam_width,
+            cand_per_pos,
+            max_words,
+            min_words,
+            strictness,
+            anchor,
+            word_boundary_leniency,
+            exclude,
+            diversity,
+            prefix_cap,
+            min_quality,
+            weights=w,
+            db_path=db_path,
         )
         cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
@@ -328,8 +357,15 @@ def find_multiword(
 
             if not transitions[i]:
                 transitions[i] = _position_transitions(
-                    conn, target, i, cand_per_pos, strictness, skip_words,
-                    word_boundary_leniency, min_quality,
+                    conn,
+                    target,
+                    i,
+                    cand_per_pos,
+                    strictness,
+                    skip_words,
+                    word_boundary_leniency,
+                    min_quality,
+                    weights=w,
                 )
 
             pos_transitions = transitions[i]
@@ -373,8 +409,11 @@ def find_multiword(
             similarity = max(0.0, 1.0 - entry[0] / n)
             if anchor > 0.0:
                 tail_similarity, _, _ = score_segments(
-                    target_tail, rhyme_tail(segs), strictness=strictness,
+                    target_tail,
+                    rhyme_tail(segs),
+                    strictness=strictness,
                     word_boundary_leniency=word_boundary_leniency,
+                    weights=w,
                 )
                 similarity = (1.0 - anchor) * similarity + anchor * tail_similarity
             naturalness, freq_geom, pos_plaus, func_ok = phrase_naturalness(
@@ -382,6 +421,7 @@ def find_multiword(
                 [tr.pos_tag for tr in steps],
                 pos_lm,
                 words=[tr.word for tr in steps],
+                weights=w,
             )
             num_words = len(words)
             stress_similarity = _stress_similarity(_stress_string(segs), target_stress)
@@ -390,6 +430,7 @@ def find_multiword(
                 segs,
                 strictness=strictness,
                 word_boundary_leniency=word_boundary_leniency,
+                weights=w,
             )
             surprise = boundary_surprise(global_alignment)
             base_score = rank_base(
@@ -398,6 +439,7 @@ def find_multiword(
                 surprise,
                 naturalness=naturalness,
                 num_words=num_words,
+                weights=w,
             )
 
             sound_key = "".join(s.ipa for s in segs)

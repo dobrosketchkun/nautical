@@ -18,7 +18,7 @@ from pathlib import Path
 
 from .config import CACHE_DB_PATH, ensure_data_dir
 
-_CACHE_FORMAT_VERSION = "u1.4-v1"
+_CACHE_FORMAT_VERSION = "u3-v1"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS query_cache (
@@ -41,7 +41,12 @@ def _connect(db_path: Path | None = None) -> sqlite3.Connection:
 
 
 def make_key(kind: str, text: str, params: dict) -> str:
-    """Stable cache key from a search kind, query text, and its parameters."""
+    """Stable cache key from a search kind, query text, and its parameters.
+
+    Callers should include ``weights_hash`` and lexicon identity
+    (``schema_version``, ``built_at``) in ``params`` so weight/DB changes
+    invalidate automatically.
+    """
     normalized = json.dumps(
         {
             "format": _CACHE_FORMAT_VERSION,
@@ -53,6 +58,24 @@ def make_key(kind: str, text: str, params: dict) -> str:
         ensure_ascii=False,
     )
     return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+
+
+def lexicon_identity(db_path: Path | None = None) -> dict[str, str]:
+    """Return ``schema_version`` / ``built_at`` for cache keys (empty if unavailable)."""
+    from .config import DB_PATH
+    from .db import loader
+
+    path = Path(db_path) if db_path is not None else DB_PATH
+    if not path.exists():
+        return {"schema_version": "", "built_at": ""}
+    try:
+        info = loader.get_stats(path)
+    except (OSError, FileNotFoundError, Exception):
+        return {"schema_version": "", "built_at": ""}
+    return {
+        "schema_version": str(info.get("schema_version", "")),
+        "built_at": str(info.get("built_at", "")),
+    }
 
 
 def cache_get(key: str, db_path: Path | None = None) -> dict | list | None:

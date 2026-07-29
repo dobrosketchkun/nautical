@@ -19,6 +19,10 @@ def test_normalize():
 def test_load_pairs_skips_meta_keys():
     pairs = eval_service.load_pairs()  # the real curated corpus
     assert pairs and all("query" in p and "expected" in p for p in pairs)
+    positives = [p for p in pairs if p.get("polarity", "positive") != "negative"]
+    negatives = [p for p in pairs if p.get("polarity") == "negative"]
+    assert len(positives) >= 25
+    assert len(negatives) >= 10
 
 
 def test_run_eval_finds_rhyme_and_reports_aggregates(db_path):
@@ -33,7 +37,9 @@ def test_run_eval_finds_rhyme_and_reports_aggregates(db_path):
         },
     ]
     try:
-        report = eval_service.run_eval(pairs, limit=25, conn=conn)
+        report = eval_service.run_eval(
+            pairs, limit=25, conn=conn, include_diversity=False
+        )
     finally:
         conn.close()
 
@@ -49,8 +55,34 @@ def test_run_eval_finds_rhyme_and_reports_aggregates(db_path):
     assert report.median_rank == hit.rank
 
 
+def test_negative_pair_fails_when_expected_in_top_n(db_path):
+    conn = _conn(db_path)
+    pairs = [
+        {
+            "query": "stainless",
+            "expected": "brainless",
+            "mode": "single",
+            "anchor": "tail",
+            "polarity": "negative",
+            "max_rank": 50,
+        }
+    ]
+    try:
+        report = eval_service.run_eval(
+            pairs, limit=50, conn=conn, include_diversity=False
+        )
+    finally:
+        conn.close()
+
+    assert report.total == 0
+    assert report.negative_total == 1
+    assert report.negative_leaks == 1
+    assert report.negative_leak_rate == pytest.approx(1.0)
+    assert not report.rows[0].success
+
+
 def test_run_eval_empty_report():
-    report = eval_service.run_eval([], limit=10)
+    report = eval_service.run_eval([], limit=10, include_diversity=False)
     assert report.total == 0
     assert report.hit_rate == 0.0
     assert report.mrr == 0.0

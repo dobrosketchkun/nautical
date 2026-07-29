@@ -1,13 +1,14 @@
 {
-  "_comment": "Curated ground-truth pairs for the Nautical evaluation harness. Every entry is hand-verified from docs/some_lyrics.txt.",
-  "_excluded": "Out of scope for Step One: English-Japanese echoes and word-transformation puns.",
+  "_comment": "Curated ground-truth pairs for the Nautical evaluation harness. Every positive is hand-verified from docs/some_lyrics.txt (English, in-scope). Negatives encode known junk tilings that must stay out of the top-N.",
+  "_excluded": "Out of scope: English-Japanese echoes and word-transformation puns (pun-stoppable, Ina-terested, Ina-sanity).",
+  "_fields": "query, expected, mode=single|multiword, anchor=full|tail|0..1, theme (optional), polarity=positive|negative (default positive), max_rank (negatives: must NOT appear in top N), note (optional).",
   "pairs": [
     {
       "query": "not a cult",
       "expected": "nautical",
       "mode": "single",
       "anchor": "full",
-      "note": "Headline boundary-crossing oronym."
+      "note": "TAKOVER headline oronym."
     },
     {
       "query": "not a cult",
@@ -15,13 +16,14 @@
       "mode": "single",
       "anchor": "full",
       "theme": "ocean, sea, ship",
-      "note": "Same oronym with nautical context."
+      "note": "Same oronym with nautical theme."
     },
     {
       "query": "clean and stainless",
       "expected": "brainless",
       "mode": "single",
-      "anchor": "tail"
+      "anchor": "tail",
+      "note": "Alkatraz: clean and stainless / acting brainless."
     },
     {
       "query": "stainless",
@@ -36,14 +38,118 @@
       "anchor": "tail"
     },
     {
+      "query": "brainless",
+      "expected": "stainless",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "painless",
+      "expected": "stainless",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
       "query": "invested",
       "expected": "requested",
+      "mode": "single",
+      "anchor": "tail",
+      "note": "TAKOVER: invested / requested."
+    },
+    {
+      "query": "requested",
+      "expected": "invested",
       "mode": "single",
       "anchor": "tail"
     },
     {
       "query": "emotion",
       "expected": "devotion",
+      "mode": "single",
+      "anchor": "tail",
+      "note": "TAKOVER: emotion / devotion."
+    },
+    {
+      "query": "devotion",
+      "expected": "emotion",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "monster",
+      "expected": "concert",
+      "mode": "single",
+      "anchor": "tail",
+      "note": "SUCKERZ: concert / FRANKENSTEIN'S MONSTER."
+    },
+    {
+      "query": "concert",
+      "expected": "monster",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "miracle",
+      "expected": "cereal",
+      "mode": "single",
+      "anchor": "tail",
+      "note": "SUCKERZ: miracle / Cereal."
+    },
+    {
+      "query": "cereal",
+      "expected": "miracle",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "history",
+      "expected": "destiny",
+      "mode": "single",
+      "anchor": "tail",
+      "note": "SUCKERZ: make history / manifest destiny."
+    },
+    {
+      "query": "destiny",
+      "expected": "history",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "urgency",
+      "expected": "currency",
+      "mode": "single",
+      "anchor": "tail",
+      "note": "TAKOVER: urgency / currency."
+    },
+    {
+      "query": "currency",
+      "expected": "urgency",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "chord",
+      "expected": "bored",
+      "mode": "single",
+      "anchor": "tail",
+      "note": "TAKOVER: striking a chord / get bored of you."
+    },
+    {
+      "query": "bored",
+      "expected": "chord",
+      "mode": "single",
+      "anchor": "tail"
+    },
+    {
+      "query": "prize",
+      "expected": "eyes",
+      "mode": "single",
+      "anchor": "tail",
+      "note": "SUCKERZ: sore eyes / eyes on the prize."
+    },
+    {
+      "query": "eyes",
+      "expected": "prize",
       "mode": "single",
       "anchor": "tail"
     },
@@ -60,6 +166,97 @@
       "mode": "multiword",
       "anchor": "full",
       "note": "Known hard semantic multi-word case."
+    },
+    {
+      "query": "nautical",
+      "expected": "no to can",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10,
+      "note": "Junk function-word tiling must stay out of top 10."
+    },
+    {
+      "query": "nautical",
+      "expected": "know to can",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10
+    },
+    {
+      "query": "nautical",
+      "expected": "no to 'cause",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10
+    },
+    {
+      "query": "nautical",
+      "expected": "no to call",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10
+    },
+    {
+      "query": "nautical",
+      "expected": "noe to can",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10
+    },
+    {
+      "query": "nautical",
+      "expected": "noh to can",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10
+    },
+    {
+      "query": "nautical",
+      "expected": "nau to can",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10
+    },
+    {
+      "query": "nautical",
+      "expected": "note a can",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10
+    },
+    {
+      "query": "nautical",
+      "expected": "naughty can",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 5,
+      "note": "Near-junk; should not dominate top 5."
+    },
+    {
+      "query": "nautical",
+      "expected": "no tickle",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 5
+    },
+    {
+      "query": "stainless",
+      "expected": "stain less",
+      "mode": "multiword",
+      "anchor": "full",
+      "polarity": "negative",
+      "max_rank": 10,
+      "note": "Spaced spelling junk for a single-word query mode misuse."
     }
   ]
 }

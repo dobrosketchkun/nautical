@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
 from .features import feature_distance
 
 
@@ -100,24 +101,39 @@ def alignment_from_dict(data: dict) -> Alignment:
     return Alignment(pairs=pairs, total_cost=data["total_cost"])
 
 
-def _strictness_scale(strictness: float) -> float:
-    # 0.0 -> 0.6 (forgiving), 0.5 -> 1.0, 1.0 -> 1.4 (strict)
-    return 0.6 + 0.8 * strictness
+def _strictness_scale(
+    strictness: float, weights: ScoringWeights = DEFAULT_WEIGHTS
+) -> float:
+    # Defaults: 0.0 -> 0.6 (forgiving), 0.5 -> 1.0, 1.0 -> 1.4 (strict)
+    return weights.strictness_base + weights.strictness_span * strictness
 
 
-def _sub_cost(a: Seg, b: Seg, strictness: float) -> float:
+def _sub_cost(
+    a: Seg,
+    b: Seg,
+    strictness: float,
+    weights: ScoringWeights = DEFAULT_WEIGHTS,
+) -> float:
     distance = feature_distance(a.ipa, b.ipa)
     if distance == 0.0:
         return 0.0
     if a.is_vowel and b.is_vowel:
-        multiplier = 1.6 if (a.stressed or b.stressed) else 0.35
+        multiplier = (
+            weights.vowel_stressed_mult
+            if (a.stressed or b.stressed)
+            else weights.vowel_unstressed_mult
+        )
     else:
         multiplier = 1.0
-    return distance * multiplier * _strictness_scale(strictness)
+    return distance * multiplier * _strictness_scale(strictness, weights)
 
 
 def _gap_cost(
-    seg: Seg, strictness: float, is_final: bool, word_boundary_leniency: bool = True
+    seg: Seg,
+    strictness: float,
+    is_final: bool,
+    word_boundary_leniency: bool = True,
+    weights: ScoringWeights = DEFAULT_WEIGHTS,
 ) -> float:
     # A trailing consonant is cheap to drop at the end of the whole sequence and,
     # when leniency is on, at any word boundary (singers routinely elide them,
@@ -126,14 +142,14 @@ def _gap_cost(
         is_final or (word_boundary_leniency and seg.word_final)
     )
     if seg.is_vowel and not seg.stressed:
-        base = 0.3
+        base = weights.gap_unstressed_vowel
     elif cheap_consonant:
-        base = 0.4
+        base = weights.gap_cheap_consonant
     elif seg.is_vowel and seg.stressed:
-        base = 1.1
+        base = weights.gap_stressed_vowel
     else:
-        base = 0.9
-    return base * _strictness_scale(strictness)
+        base = weights.gap_other
+    return base * _strictness_scale(strictness, weights)
 
 
 def align(
@@ -141,13 +157,15 @@ def align(
     b: list[Seg],
     strictness: float = 0.5,
     word_boundary_leniency: bool = True,
+    weights: ScoringWeights | None = None,
 ) -> Alignment:
+    w = weights if weights is not None else DEFAULT_WEIGHTS
     n, m = len(a), len(b)
     dp = [[0.0] * (m + 1) for _ in range(n + 1)]
     back = [[""] * (m + 1) for _ in range(n + 1)]
 
     def gap(seg: Seg, is_final: bool) -> float:
-        return _gap_cost(seg, strictness, is_final, word_boundary_leniency)
+        return _gap_cost(seg, strictness, is_final, word_boundary_leniency, w)
 
     for i in range(1, n + 1):
         dp[i][0] = dp[i - 1][0] + gap(a[i - 1], is_final=(i == n))
@@ -158,7 +176,7 @@ def align(
 
     for i in range(1, n + 1):
         for j in range(1, m + 1):
-            diag = dp[i - 1][j - 1] + _sub_cost(a[i - 1], b[j - 1], strictness)
+            diag = dp[i - 1][j - 1] + _sub_cost(a[i - 1], b[j - 1], strictness, w)
             delete = dp[i - 1][j] + gap(a[i - 1], is_final=(i == n))
             insert = dp[i][j - 1] + gap(b[j - 1], is_final=(j == m))
             best = min(diag, delete, insert)
@@ -171,7 +189,7 @@ def align(
         move = back[i][j]
         if move == "diag":
             src, tgt = a[i - 1], b[j - 1]
-            cost = _sub_cost(src, tgt, strictness)
+            cost = _sub_cost(src, tgt, strictness, w)
             op = "match" if feature_distance(src.ipa, tgt.ipa) == 0.0 else "sub"
             pairs.append(AlignedPair(src, tgt, op, cost))
             i, j = i - 1, j - 1

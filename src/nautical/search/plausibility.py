@@ -13,9 +13,11 @@ from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 
-FREQ_GEOM_WEIGHT = 0.40
-POS_PLAUS_WEIGHT = 0.45
-FUNCTION_OK_WEIGHT = 0.15
+from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
+
+FREQ_GEOM_WEIGHT = DEFAULT_WEIGHTS.freq_geom_weight
+POS_PLAUS_WEIGHT = DEFAULT_WEIGHTS.pos_plaus_weight
+FUNCTION_OK_WEIGHT = DEFAULT_WEIGHTS.function_ok_weight
 
 _FREQ_EPS = 1e-6
 _ADD_K = 0.01
@@ -23,7 +25,7 @@ _LOG_FLOOR = math.log(1e-6)
 _UNK = "UNK"
 _BOS = "<s>"
 # ≥2/3 closed-class catches 3-word "no to X" tilings (plan's 0.8 never fires on n=3).
-CLOSED_FRAC_THRESHOLD = 2.0 / 3.0
+CLOSED_FRAC_THRESHOLD = DEFAULT_WEIGHTS.closed_frac_threshold
 
 CLOSED_CLASS_TAGS = frozenset(
     {
@@ -161,16 +163,26 @@ def geometric_freq(frequencies: Sequence[float]) -> float:
     return math.exp(sum(logs) / len(logs))
 
 
-def function_ok(tags: Sequence[str], words: Sequence[str] | None = None) -> float:
-    """1.0 unless ≥2/3 of tokens are closed-class, then ``1 - closed_frac``."""
+def function_ok(
+    tags: Sequence[str],
+    words: Sequence[str] | None = None,
+    *,
+    closed_frac_threshold: float | None = None,
+) -> float:
+    """1.0 unless closed-class fraction ≥ threshold, then ``1 - closed_frac``."""
     if not tags:
         return 1.0
+    threshold = (
+        CLOSED_FRAC_THRESHOLD
+        if closed_frac_threshold is None
+        else closed_frac_threshold
+    )
     if words is None or len(words) != len(tags):
         closed = sum(1 for t in tags if t in CLOSED_CLASS_TAGS)
     else:
         closed = sum(1 for w, t in zip(words, tags) if is_closed_token(w, t))
     closed_frac = closed / len(tags)
-    if closed_frac >= CLOSED_FRAC_THRESHOLD:
+    if closed_frac >= threshold:
         return 1.0 - closed_frac
     return 1.0
 
@@ -230,6 +242,7 @@ def phrase_naturalness(
     tags: Sequence[str],
     lm: PosTagLM | None,
     words: Sequence[str] | None = None,
+    weights: ScoringWeights | None = None,
 ) -> tuple[float, float, float, float]:
     """Return ``(naturalness, freq_geom, pos_plaus, function_ok)``.
 
@@ -237,16 +250,17 @@ def phrase_naturalness(
     ``naturalness`` is capped by ``function_ok`` so pure glue phrases cannot
     keep a high Nat score from frequency alone.
     """
+    w = weights if weights is not None else DEFAULT_WEIGHTS
     freq_geom = geometric_freq(frequencies)
-    func = function_ok(tags, words)
+    func = function_ok(tags, words, closed_frac_threshold=w.closed_frac_threshold)
     if lm is None:
         pos_plaus = 0.5
     else:
         pos_plaus = lm.pos_plausibility(tags)
     naturalness = (
-        FREQ_GEOM_WEIGHT * freq_geom
-        + POS_PLAUS_WEIGHT * pos_plaus
-        + FUNCTION_OK_WEIGHT * func
+        w.freq_geom_weight * freq_geom
+        + w.pos_plaus_weight * pos_plaus
+        + w.function_ok_weight * func
     )
     if func < 1.0:
         naturalness = min(naturalness, func)

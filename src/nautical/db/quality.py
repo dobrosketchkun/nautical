@@ -8,8 +8,10 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 
-# Default query gate (U3 may retune later).
-DEFAULT_MIN_QUALITY = 0.35
+from ..scoring_weights import DEFAULT_WEIGHTS
+
+# Default query gate (also exposed on ScoringWeights.min_quality).
+DEFAULT_MIN_QUALITY = DEFAULT_WEIGHTS.min_quality
 
 ZIPF_FLOOR = 0.0
 ZIPF_CEIL = 7.0

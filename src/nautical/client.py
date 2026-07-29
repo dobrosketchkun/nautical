@@ -17,6 +17,11 @@ from .db import loader
 from .db.quality import DEFAULT_MIN_QUALITY
 from .errors import NotInitializedError
 from .phonetics import distance as distance_service
+from .scoring_weights import (
+    WEIGHTS_FILENAME,
+    ScoringWeights,
+    resolve_weights,
+)
 from .search import decoder as multiword_search
 from .search import words as word_search
 from .search.diversity import select_diverse
@@ -45,9 +50,24 @@ class SearchResponse(Generic[T]):
 class Nautical:
     """Configurable facade for embedding Nautical in Python applications."""
 
-    def __init__(self, data_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        data_dir: str | Path | None = None,
+        *,
+        weights: ScoringWeights | None = None,
+        weights_path: str | Path | None = None,
+    ) -> None:
         self.paths = NauticalPaths.resolve(data_dir)
+        self.weights = resolve_weights(
+            data_dir=self.paths.data_dir,
+            weights_path=weights_path,
+            weights=weights,
+        )
         self._vectors: vectors_service.Vectors | None = None
+
+    @property
+    def weights_path(self) -> Path:
+        return self.paths.data_dir / WEIGHTS_FILENAME
 
     @property
     def data_dir(self) -> Path:
@@ -186,7 +206,7 @@ class Nautical:
         theme: str | list[str] | None = None,
         seed: str | list[str] | None = None,
         seed_limit: int = 25,
-        theme_weight: float = 0.5,
+        theme_weight: float | None = None,
         min_theme: float | None = None,
         include_self: bool = False,
         multiword: bool = False,
@@ -198,10 +218,14 @@ class Nautical:
         exclude: str | frozenset[str] | None = None,
         diversity: float = 0.35,
         prefix_cap: int = 3,
-        min_quality: float = DEFAULT_MIN_QUALITY,
+        min_quality: float | None = None,
         use_cache: bool = True,
     ) -> SearchResponse:
         self._require_db()
+        if min_quality is None:
+            min_quality = self.weights.min_quality
+        if theme_weight is None:
+            theme_weight = self.weights.theme_weight_default
         context_terms, vectors = self._context_terms(theme, seed, seed_limit)
         exclusions = (
             exclude
@@ -237,6 +261,8 @@ class Nautical:
                 decode_diversity,
                 decode_prefix_cap,
                 min_quality,
+                weights=self.weights,
+                db_path=self.paths.db_path,
             )
         else:
             cache_key = word_search.rhymes_cache_key(
@@ -250,6 +276,8 @@ class Nautical:
                 multi_variant,
                 exclusions,
                 min_quality,
+                weights=self.weights,
+                db_path=self.paths.db_path,
             )
         cached = use_cache and (
             cache_service.cache_get(cache_key, self.paths.cache_db_path) is not None
@@ -274,6 +302,7 @@ class Nautical:
                 use_cache=use_cache,
                 db_path=self.paths.db_path,
                 cache_db_path=self.paths.cache_db_path,
+                weights=self.weights,
             )
         else:
             candidates = word_search.find_rhymes(
@@ -290,6 +319,7 @@ class Nautical:
                 use_cache=use_cache,
                 db_path=self.paths.db_path,
                 cache_db_path=self.paths.cache_db_path,
+                weights=self.weights,
             )
         if min_similarity > 0.0:
             candidates = [r for r in candidates if r.similarity >= min_similarity]
@@ -345,8 +375,10 @@ class Nautical:
         pairs_path: str | Path | None = None,
         limit: int = 50,
         use_cache: bool = True,
+        weights: ScoringWeights | None = None,
     ) -> eval_service.EvalReport:
         self._require_db()
+        active = weights if weights is not None else self.weights
         pairs = eval_service.load_pairs(Path(pairs_path) if pairs_path else None)
         vectors = self.ensure_vectors() if any(p.get("theme") for p in pairs) else None
         return eval_service.run_eval(
@@ -356,4 +388,5 @@ class Nautical:
             vectors=vectors,
             db_path=self.paths.db_path,
             cache_db_path=self.paths.cache_db_path,
+            weights=active,
         )

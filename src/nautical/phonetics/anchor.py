@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from ..phonology.arpabet import is_vowel
 from .align import Alignment, Seg
+from ..scoring_weights import ScoringWeights
 from .distance import score_segments
 
 
@@ -111,18 +112,25 @@ def anchored_score(
     anchor: float = 0.5,
     strictness: float = 0.5,
     word_boundary_leniency: bool = True,
+    weights: ScoringWeights | None = None,
 ) -> AnchoredScore:
     """Score two segment sequences under the anchor dial.
 
     ``anchored_similarity = (1 - anchor) * full + anchor * tail``.
     """
     full_similarity, stress_similarity, full_alignment = score_segments(
-        target_segs, cand_segs, strictness=strictness,
+        target_segs,
+        cand_segs,
+        strictness=strictness,
         word_boundary_leniency=word_boundary_leniency,
+        weights=weights,
     )
     tail_similarity, _, tail_alignment = score_segments(
-        rhyme_tail(target_segs), rhyme_tail(cand_segs), strictness=strictness,
+        rhyme_tail(target_segs),
+        rhyme_tail(cand_segs),
+        strictness=strictness,
         word_boundary_leniency=word_boundary_leniency,
+        weights=weights,
     )
     anchored = (1.0 - anchor) * full_similarity + anchor * tail_similarity
     return AnchoredScore(

@@ -24,6 +24,7 @@ from .search import decoder as multiword_search
 from .search import words as word_search
 from .semantics import theme as theme_service
 from .semantics import vectors as vectors_service
+from . import tune as tune_service
 
 # Force UTF-8 on stdout/stderr so IPA and box-drawing characters survive on
 # Windows consoles (default cp1252 cannot encode them).
@@ -118,6 +119,12 @@ app.add_typer(cache_app, name="cache")
 
 console = Console()
 engine = Nautical()
+
+
+def _resolve_engine(weights_path: str | None = None) -> Nautical:
+    if weights_path:
+        return Nautical(weights_path=weights_path)
+    return engine
 
 
 @db_app.command("build")
@@ -490,7 +497,11 @@ def rhymes(
         help="Number of lexicon neighbors used to expand --seed.",
     ),
     theme_weight: float = typer.Option(
-        0.5, "--theme-weight", min=0.0, max=1.0, help="Blend: 0 = phonetics, 1 = theme."
+        None,
+        "--theme-weight",
+        min=0.0,
+        max=1.0,
+        help="Blend: 0 = phonetics, 1 = theme (default from scoring weights).",
     ),
     min_theme: float = typer.Option(
         None, "--min-theme", help="Drop results whose theme_fit is below this (-1..1)."
@@ -710,7 +721,7 @@ def _rhymes_multiword(
     theme: str | None,
     seed: str | None,
     seed_limit: int,
-    theme_weight: float,
+    theme_weight: float | None,
     min_theme: float | None,
     show_align: bool,
     word_boundary_leniency: bool = True,
@@ -911,13 +922,17 @@ def eval_cmd(
     no_cache: bool = typer.Option(
         False, "--no-cache", help="Bypass the query-result cache."
     ),
+    weights_path: str = typer.Option(
+        None, "--weights", help="Scoring weights JSON (default: data_dir file or built-ins)."
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Replay the curated corpus and report rediscovery rank + MRR/hit-rate."""
     path = Path(pairs_path) if pairs_path else eval_service.DEFAULT_PAIRS_PATH
+    active = _resolve_engine(weights_path)
     started = time.perf_counter()
     try:
-        report = engine.evaluate(
+        report = active.evaluate(
             pairs_path=pairs_path, limit=limit, use_cache=not no_cache
         )
     except FileNotFoundError:
@@ -932,73 +947,84 @@ def eval_cmd(
     elapsed = time.perf_counter() - started
 
     if as_json:
-        typer.echo(
-            json.dumps(
+        payload = {
+            "limit": report.limit,
+            "total": report.total,
+            "hits": report.hits,
+            "hit_rate": round(report.hit_rate, 4),
+            "mrr": round(report.mrr, 4),
+            "median_rank": report.median_rank,
+            "negative_total": report.negative_total,
+            "negative_leaks": report.negative_leaks,
+            "negative_leak_rate": round(report.negative_leak_rate, 4),
+            "mean_negative_leak_rank": report.mean_negative_leak_rank,
+            "diversity": None
+            if report.diversity is None
+            else {
+                "query": report.diversity.query,
+                "top_k": report.diversity.top_k,
+                "distinct_ipa_ratio": round(report.diversity.distinct_ipa_ratio, 4),
+                "distinct_first_word_ratio": round(
+                    report.diversity.distinct_first_word_ratio, 4
+                ),
+            },
+            "rows": [
                 {
-                    "limit": report.limit,
-                    "total": report.total,
-                    "hits": report.hits,
-                    "hit_rate": round(report.hit_rate, 4),
-                    "mrr": round(report.mrr, 4),
-                    "median_rank": report.median_rank,
-                    "rows": [
-                        {
-                            "query": r.query,
-                            "expected": r.expected,
-                            "mode": r.mode,
-                            "anchor": r.anchor,
-                            "theme": r.theme,
-                            "found": r.found,
-                            "rank": r.rank,
-                            "similarity": round(r.similarity, 4)
-                            if r.similarity is not None
-                            else None,
-                            "rank_score": round(r.rank_score, 4)
-                            if r.rank_score is not None
-                            else None,
-                            "boundary_surprise": round(r.boundary_surprise, 4)
-                            if r.boundary_surprise is not None
-                            else None,
-                            "theme_fit": round(r.theme_fit, 4)
-                            if r.theme_fit is not None
-                            else None,
-                        }
-                        for r in report.rows
-                    ],
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-        )
+                    "query": r.query,
+                    "expected": r.expected,
+                    "mode": r.mode,
+                    "anchor": r.anchor,
+                    "theme": r.theme,
+                    "polarity": r.polarity,
+                    "found": r.found,
+                    "rank": r.rank,
+                    "success": r.success,
+                    "similarity": round(r.similarity, 4)
+                    if r.similarity is not None
+                    else None,
+                    "rank_score": round(r.rank_score, 4)
+                    if r.rank_score is not None
+                    else None,
+                    "boundary_surprise": round(r.boundary_surprise, 4)
+                    if r.boundary_surprise is not None
+                    else None,
+                    "theme_fit": round(r.theme_fit, 4)
+                    if r.theme_fit is not None
+                    else None,
+                }
+                for r in report.rows
+            ],
+        }
+        typer.echo(json.dumps(payload, ensure_ascii=False, indent=2))
         return
 
     table = Table(title=f"Evaluation ({path.name})")
     table.add_column("Query", style="cyan")
     table.add_column("Expected", style="cyan")
+    table.add_column("Pol")
     table.add_column("Mode")
     table.add_column("Anchor")
     table.add_column("Theme", style="green")
     table.add_column("Rank", justify="right", style="magenta")
+    table.add_column("OK")
     table.add_column("Sim", justify="right")
     table.add_column("Score", justify="right")
-    table.add_column("Bound", justify="right")
     for r in report.rows:
         rank_str = str(r.rank) if r.rank is not None else "[red]-[/red]"
         sim_str = f"{r.similarity:.3f}" if r.similarity is not None else "-"
         score_str = f"{r.rank_score:.3f}" if r.rank_score is not None else "-"
-        boundary_str = (
-            f"{r.boundary_surprise:.2f}" if r.boundary_surprise is not None else "-"
-        )
+        ok = "[green]y[/green]" if r.success else "[red]n[/red]"
         table.add_row(
             r.query,
             r.expected,
+            r.polarity[:3],
             r.mode,
             r.anchor,
             r.theme or "-",
             rank_str,
+            ok,
             sim_str,
             score_str,
-            boundary_str,
         )
     console.print(table)
 
@@ -1010,7 +1036,133 @@ def eval_cmd(
         f"[bold]MRR:[/bold] {report.mrr:.3f}   "
         f"[bold]median rank (hits):[/bold] {median_str}"
     )
-    console.print(_result_summary(report.total, elapsed, cached=False))
+    if report.negative_total:
+        mean_leak = report.mean_negative_leak_rank
+        mean_str = f"{mean_leak:.1f}" if mean_leak is not None else "-"
+        console.print(
+            f"[bold]negatives:[/bold] leaks {report.negative_leaks}/"
+            f"{report.negative_total} ({report.negative_leak_rate:.0%})   "
+            f"[bold]mean leak rank:[/bold] {mean_str}"
+        )
+    if report.diversity is not None:
+        d = report.diversity
+        console.print(
+            f"[bold]diversity@{d.top_k} ({d.query}):[/bold] "
+            f"IPA {d.distinct_ipa_ratio:.2f}   "
+            f"first-word {d.distinct_first_word_ratio:.2f}"
+        )
+    console.print(_result_summary(report.total + report.negative_total, elapsed, cached=False))
+
+
+@app.command("tune")
+def tune_cmd(
+    trials: int = typer.Option(40, "--trials", min=0, help="Random-search trial count."),
+    seed: int = typer.Option(0, "--seed", help="RNG seed for reproducibility."),
+    limit: int = typer.Option(50, "--limit", help="Eval rank window."),
+    subset: int = typer.Option(
+        None,
+        "--subset",
+        help="Evaluate only the first N corpus pairs (faster smoke).",
+    ),
+    pairs_path: str = typer.Option(
+        None, "--pairs", help="Corpus JSON (default: packaged eval_pairs.json)."
+    ),
+    no_cache: bool = typer.Option(False, "--no-cache", help="Bypass result cache."),
+    write: bool = typer.Option(
+        False, "--write", help="Write best weights to data_dir/scoring_weights.json."
+    ),
+    weights_path: str = typer.Option(
+        None, "--weights", help="Starting weights JSON (default: built-ins / data_dir)."
+    ),
+    as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
+) -> None:
+    """Random-search scoring weights against the eval corpus.
+
+    Objective: MRR(positives) - 0.5 * negative_leak_rate. Larger trial budgets
+    are slow until U4 speeds cold queries; use --subset / --trials for smoke.
+    """
+    active = _resolve_engine(weights_path)
+    try:
+        active._require_db()
+    except NotInitializedError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
+
+    pairs = eval_service.load_pairs(Path(pairs_path) if pairs_path else None)
+    vectors = (
+        active.ensure_vectors() if any(p.get("theme") for p in pairs) else None
+    )
+    started = time.perf_counter()
+    with console.status(f"Tuning ({trials} trials)..."):
+        report = tune_service.run_tune(
+            pairs=pairs,
+            trials=trials,
+            seed=seed,
+            limit=limit,
+            use_cache=not no_cache,
+            base=active.weights,
+            vectors=vectors,
+            db_path=active.paths.db_path,
+            cache_db_path=active.paths.cache_db_path,
+            subset=subset,
+            include_diversity=False,
+        )
+    elapsed = time.perf_counter() - started
+
+    out_path = None
+    if write:
+        out_path = str(tune_service.write_best(report, active.weights_path))
+
+    if as_json:
+        typer.echo(
+            json.dumps(
+                {
+                    "seed": report.seed,
+                    "improved": report.improved,
+                    "baseline": {
+                        "objective": round(report.baseline.objective, 4),
+                        "mrr": round(report.baseline.mrr, 4),
+                        "negative_leak_rate": round(
+                            report.baseline.negative_leak_rate, 4
+                        ),
+                        "hit_rate": round(report.baseline.hit_rate, 4),
+                        "weights": report.baseline.weights.to_dict(),
+                    },
+                    "best": {
+                        "objective": round(report.best.objective, 4),
+                        "mrr": round(report.best.mrr, 4),
+                        "negative_leak_rate": round(report.best.negative_leak_rate, 4),
+                        "hit_rate": round(report.best.hit_rate, 4),
+                        "weights": report.best.weights.to_dict(),
+                    },
+                    "written": out_path,
+                    "elapsed_s": round(elapsed, 2),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    console.print(
+        f"[bold]baseline[/bold]  obj={report.baseline.objective:.3f}  "
+        f"MRR={report.baseline.mrr:.3f}  "
+        f"neg_leak={report.baseline.negative_leak_rate:.0%}  "
+        f"hit={report.baseline.hit_rate:.0%}"
+    )
+    console.print(
+        f"[bold]best[/bold]      obj={report.best.objective:.3f}  "
+        f"MRR={report.best.mrr:.3f}  "
+        f"neg_leak={report.best.negative_leak_rate:.0%}  "
+        f"hit={report.best.hit_rate:.0%}"
+    )
+    if report.improved:
+        console.print("[green]Improved over defaults.[/green]")
+    else:
+        console.print("[yellow]No improvement over defaults.[/yellow]")
+    if out_path:
+        console.print(f"Wrote weights to [cyan]{out_path}[/cyan]")
+    console.print(f"({len(report.trials)} configs in {elapsed:.1f}s, seed={report.seed})")
 
 
 if __name__ == "__main__":

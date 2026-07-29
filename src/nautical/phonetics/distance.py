@@ -15,6 +15,7 @@ import editdistance
 
 from ..config import DB_PATH
 from ..pronounce import enriched_segment_variants, enriched_segments
+from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
 from .align import Alignment, Seg, align
 
 
@@ -46,6 +47,7 @@ def score_segments(
     segs_b: list[Seg],
     strictness: float = 0.5,
     word_boundary_leniency: bool = True,
+    weights: ScoringWeights | None = None,
 ) -> tuple[float, float, Alignment]:
     """Align two segment sequences and return (similarity, stress_similarity, alignment).
 
@@ -53,8 +55,11 @@ def score_segments(
     formula lives in one place.
     """
     alignment = align(
-        segs_a, segs_b, strictness=strictness,
+        segs_a,
+        segs_b,
+        strictness=strictness,
         word_boundary_leniency=word_boundary_leniency,
+        weights=weights if weights is not None else DEFAULT_WEIGHTS,
     )
     columns = len(alignment.pairs) or 1
     similarity = max(0.0, 1.0 - alignment.total_cost / columns)
@@ -72,6 +77,7 @@ def phonetic_distance(
     multi_variant: bool = True,
     db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
+    weights: ScoringWeights | None = None,
 ) -> DistanceResult:
     """Compute the decomposed phonetic distance between two texts.
 
@@ -97,8 +103,11 @@ def phonetic_distance(
     for segs_a in variants_a:
         for segs_b in variants_b:
             similarity, stress_similarity, alignment = score_segments(
-                segs_a, segs_b, strictness=strictness,
+                segs_a,
+                segs_b,
+                strictness=strictness,
                 word_boundary_leniency=word_boundary_leniency,
+                weights=weights,
             )
             if best is None or similarity > best[0]:
                 best = (similarity, stress_similarity, alignment, segs_a, segs_b)

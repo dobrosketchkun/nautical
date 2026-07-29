@@ -113,3 +113,22 @@ def test_find_rhymes_deterministic(db_path):
     assert [round(r.similarity, 6) for r in first] == [
         round(r.similarity, 6) for r in second
     ]
+
+
+def test_cache_key_changes_with_weights_hash(db_path):
+    from nautical.scoring_weights import DEFAULT_WEIGHTS
+
+    k1 = word_search.rhymes_cache_key(
+        "stainless", 5, 100, 0.5, 0.5, False, weights=DEFAULT_WEIGHTS, db_path=db_path
+    )
+    k2 = word_search.rhymes_cache_key(
+        "stainless",
+        5,
+        100,
+        0.5,
+        0.5,
+        False,
+        weights=DEFAULT_WEIGHTS.with_updates(stress_weight=0.99),
+        db_path=db_path,
+    )
+    assert k1 != k2

@@ -17,6 +17,7 @@ from ..phonetics.anchor import (
     segs_from_stored,
 )
 from ..pronounce import enriched_segment_variants, enriched_segments, tokenize
+from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
 from .index import candidate_ids, tail_candidate_ids
 from .ranking import ScoreComponents, display_sort_key, merge_variant_forms, rank_base
 
@@ -101,8 +102,12 @@ def rhymes_cache_key(
     multi_variant: bool = True,
     exclude: frozenset[str] | None = None,
     min_quality: float = DEFAULT_MIN_QUALITY,
+    weights: ScoringWeights | None = None,
+    db_path: Path | None = None,
 ) -> str:
-    """Cache key for a single-word search (phonetic + quality params)."""
+    """Cache key for a single-word search (phonetic + quality + weights)."""
+    w = weights if weights is not None else DEFAULT_WEIGHTS
+    lex = cache_service.lexicon_identity(db_path)
     return cache_service.make_key(
         "rhymes",
         text,
@@ -116,6 +121,9 @@ def rhymes_cache_key(
             "multi_variant": multi_variant,
             "exclude": sorted(exclude) if exclude else [],
             "min_quality": min_quality,
+            "weights_hash": w.weights_hash(),
+            "schema_version": lex["schema_version"],
+            "built_at": lex["built_at"],
         },
     )
 
@@ -130,11 +138,12 @@ def find_rhymes(
     word_boundary_leniency: bool = True,
     multi_variant: bool = True,
     exclude: frozenset[str] | None = None,
-    min_quality: float = DEFAULT_MIN_QUALITY,
+    min_quality: float | None = None,
     use_cache: bool = True,
     db_path: Path | None = None,
     cache_db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
+    weights: ScoringWeights | None = None,
 ) -> list[RhymeResult]:
     """Return ranked single-word sound-alikes for ``text``.
 
@@ -148,16 +157,29 @@ def find_rhymes(
     cheap to drop; ``exclude`` drops those words from the results before limiting.
     ``min_quality`` gates the candidate inventory (0 = full lexicon).
 
-    Results are cached (keyed on the phonetic + quality params) unless
+    Results are cached (keyed on the phonetic + quality + weights params) unless
     ``use_cache`` is False or an explicit ``conn`` is supplied (tests pass their
     own DB).
     """
+    w = weights if weights is not None else DEFAULT_WEIGHTS
+    if min_quality is None:
+        min_quality = w.min_quality
     exclude = exclude or frozenset()
     cache_key = None
     if use_cache and conn is None:
         cache_key = rhymes_cache_key(
-            text, limit, pool, strictness, anchor, include_self,
-            word_boundary_leniency, multi_variant, exclude, min_quality,
+            text,
+            limit,
+            pool,
+            strictness,
+            anchor,
+            include_self,
+            word_boundary_leniency,
+            multi_variant,
+            exclude,
+            min_quality,
+            weights=w,
+            db_path=db_path,
         )
         cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
@@ -223,8 +245,12 @@ def find_rhymes(
         score = None
         for target_segs in target_variants:
             s = anchored_score(
-                target_segs, cand_segs, anchor=anchor, strictness=strictness,
+                target_segs,
+                cand_segs,
+                anchor=anchor,
+                strictness=strictness,
                 word_boundary_leniency=word_boundary_leniency,
+                weights=w,
             )
             if score is None or s.anchored_similarity > score.anchored_similarity:
                 score = s
@@ -233,6 +259,7 @@ def find_rhymes(
             score.anchored_similarity,
             score.stress_similarity,
             surprise,
+            weights=w,
         )
         sound_key = ipa or "".join(s.ipa for s in cand_segs)
         freq = frequency or 0.0

@@ -9,11 +9,13 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, fields
 
+from ..scoring_weights import DEFAULT_WEIGHTS, ScoringWeights
 
-STRESS_WEIGHT = 0.10
-BOUNDARY_WEIGHT = 0.10
-NATURALNESS_WEIGHT = 0.35
-WORD_COUNT_PENALTY = 0.05
+# Back-compat aliases for the default weight set.
+STRESS_WEIGHT = DEFAULT_WEIGHTS.stress_weight
+BOUNDARY_WEIGHT = DEFAULT_WEIGHTS.boundary_weight
+NATURALNESS_WEIGHT = DEFAULT_WEIGHTS.naturalness_weight
+WORD_COUNT_PENALTY = DEFAULT_WEIGHTS.word_count_penalty
 
 
 @dataclass
@@ -49,20 +51,22 @@ def rank_base(
     *,
     naturalness: float | None = None,
     num_words: int = 1,
+    weights: ScoringWeights | None = None,
 ) -> float:
     """Return the provisional non-semantic ordering score.
 
     Multi-word results retain the Phase 4 naturalness and word-count terms.
     Stress and boundary movement are now real ranking signals in both modes.
     """
+    w = weights if weights is not None else DEFAULT_WEIGHTS
     score = (
         phonetic_similarity
-        + STRESS_WEIGHT * stress_similarity
-        + BOUNDARY_WEIGHT * boundary_surprise
+        + w.stress_weight * stress_similarity
+        + w.boundary_weight * boundary_surprise
     )
     if naturalness is not None:
-        score += NATURALNESS_WEIGHT * naturalness
-        score -= WORD_COUNT_PENALTY * num_words
+        score += w.naturalness_weight * naturalness
+        score -= w.word_count_penalty * num_words
     return score
 
 
