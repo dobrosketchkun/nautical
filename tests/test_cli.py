@@ -64,4 +64,21 @@ def test_seed_expansion_and_json_score_contract(monkeypatch):
     assert payload[0]["rank_score"] == 1.025
     assert payload[0]["boundary_surprise"] == 0.25
     assert payload[0]["context_terms"] == ["bank", "money"]
+    assert payload[0]["variants"] == []
     assert "alignment" in payload[0]
+
+
+def test_format_primary_with_variants():
+    assert cli._format_primary_with_variants("no to can", []) == "no to can"
+    assert (
+        cli._format_primary_with_variants("no to can", ["know to can", "note a can"])
+        == "no to can  [know to can/note a can]"
+    )
+    assert (
+        cli._format_primary_with_variants(
+            "no to can",
+            ["a", "b", "c", "d"],
+            max_show=3,
+        )
+        == "no to can  [a/b/c…]"
+    )

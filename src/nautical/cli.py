@@ -417,6 +417,19 @@ def _result_summary(count: int, elapsed: float, cached: bool) -> str:
     return f"[dim]{count} result(s) in {elapsed * 1000:.0f} ms{tag}[/dim]"
 
 
+def _format_primary_with_variants(
+    primary: str, variants: list[str], max_show: int = 3
+) -> str:
+    """Render primary spelling with a compact alternate-forms suffix."""
+    if not variants:
+        return primary
+    shown = variants[:max_show]
+    suffix = "/".join(shown)
+    if len(variants) > max_show:
+        suffix += "…"
+    return f"{primary}  [{suffix}]"
+
+
 def _parse_anchor(value: str | None, default: float) -> float:
     """Parse an ``--anchor`` value: ``tail`` -> 1.0, ``full`` -> 0.0, or a float."""
     if value is None:
@@ -587,6 +600,7 @@ def rhymes(
                         "frequency": r.frequency,
                         "syllable_count": r.syllable_count,
                         "ipa": r.ipa,
+                        "variants": list(r.variants),
                         "alignment": _alignment_to_json(r.alignment),
                         **(
                             {"theme_fit": round(r.theme_fit, 4)}
@@ -623,7 +637,7 @@ def rhymes(
     for i, r in enumerate(results, start=1):
         row = [
             str(i),
-            r.word,
+            _format_primary_with_variants(r.word, r.variants),
             f"{r.rank_score:.3f}",
             f"{r.similarity:.3f}",
             f"{r.full_similarity:.2f}",
@@ -718,6 +732,7 @@ def _rhymes_multiword(
                         "boundary_surprise": round(r.boundary_surprise, 4),
                         "num_words": r.num_words,
                         "ipa": r.ipa,
+                        "variants": list(r.variants),
                         "alignment": _alignment_to_json(r.alignment),
                         "chunks": [
                             {
@@ -760,7 +775,7 @@ def _rhymes_multiword(
     for i, r in enumerate(results, start=1):
         row = [
             str(i),
-            r.phrase,
+            _format_primary_with_variants(r.phrase, r.variants),
             f"{r.rank_score:.3f}",
             f"{r.similarity:.3f}",
             f"{r.naturalness:.2f}",

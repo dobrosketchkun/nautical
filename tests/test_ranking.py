@@ -4,7 +4,12 @@ import pytest
 
 from nautical.phonetics.align import Seg, align
 from nautical.phonetics.anchor import boundary_surprise
-from nautical.search.ranking import apply_context_score, rank_base
+from nautical.search.ranking import (
+    apply_context_score,
+    display_sort_key,
+    merge_variant_forms,
+    rank_base,
+)
 
 
 def _seg(ipa: str, *, final: bool = False) -> Seg:
@@ -48,3 +53,19 @@ def test_stress_and_boundary_are_real_base_ranking_signals():
 
 def test_context_blends_with_complete_base_score():
     assert apply_context_score(1.4, -1.0, 0.2) == pytest.approx(1.12)
+
+
+def test_display_sort_key_prefers_frequency_then_length_then_alpha():
+    # Higher frequency wins (lower sort key).
+    assert display_sort_key(10.0, "noe") < display_sort_key(1.0, "no")
+    # Equal frequency: shorter spelling wins.
+    assert display_sort_key(1.0, "no") < display_sort_key(1.0, "know")
+    # Equal frequency and length: alphabetical.
+    assert display_sort_key(1.0, "can") < display_sort_key(1.0, "con")
+
+
+def test_merge_variant_forms_excludes_primary_and_sorts():
+    assert merge_variant_forms("no to can", ["note a can"], "know to can", "no to can") == [
+        "know to can",
+        "note a can",
+    ]

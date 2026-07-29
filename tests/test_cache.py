@@ -65,6 +65,7 @@ def test_rhyme_result_roundtrip_preserves_alignment(db_path, cache_db):
         assert back.rank_score == pytest.approx(orig.rank_score)
         assert back.boundary_surprise == pytest.approx(orig.boundary_surprise)
         assert back.ipa == orig.ipa
+        assert back.variants == orig.variants
         assert back.alignment.total_cost == pytest.approx(orig.alignment.total_cost)
         assert back.alignment.pretty() == orig.alignment.pretty()
 
@@ -90,6 +91,7 @@ def test_multiword_result_roundtrip_preserves_chunks(db_path, cache_db):
     for orig, back in zip(results, restored):
         assert back.score == pytest.approx(orig.score)
         assert back.boundary_surprise == pytest.approx(orig.boundary_surprise)
+        assert back.variants == orig.variants
         assert back.alignment.pretty() == orig.alignment.pretty()
         assert [w for w, _ in back.chunks] == [w for w, _ in orig.chunks]
         for (_, a_back), (_, a_orig) in zip(back.chunks, orig.chunks):

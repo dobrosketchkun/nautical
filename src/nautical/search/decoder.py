@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import cache as cache_service
@@ -32,7 +32,7 @@ from ..phonetics.anchor import boundary_surprise, rhyme_tail, segs_from_stored
 from ..phonetics.distance import _stress_similarity, _stress_string, score_segments
 from ..pronounce import enriched_segments, tokenize
 from .normalize import onset_keys
-from .ranking import ScoreComponents, rank_base
+from .ranking import ScoreComponents, display_sort_key, merge_variant_forms, rank_base
 
 _segs_from_row = segs_from_stored
 
@@ -45,6 +45,7 @@ class MultiwordResult:
     chunks: list[tuple[str, Alignment]]
     alignment: Alignment
     scores: ScoreComponents
+    variants: list[str] = field(default_factory=list)
 
     @property
     def similarity(self) -> float:
@@ -85,6 +86,7 @@ def _result_to_dict(r: MultiwordResult) -> dict:
         "chunks": [[w, alignment_to_dict(a)] for w, a in r.chunks],
         "alignment": alignment_to_dict(r.alignment),
         "scores": r.scores.to_dict(),
+        "variants": list(r.variants),
     }
 
 
@@ -97,6 +99,7 @@ def _result_from_dict(d: dict) -> MultiwordResult:
         chunks=[(w, alignment_from_dict(a)) for w, a in d["chunks"]],
         alignment=alignment_from_dict(d["alignment"]),
         scores=ScoreComponents.from_dict(d["scores"]),
+        variants=list(d.get("variants", [])),
     )
 
 
@@ -334,7 +337,10 @@ def find_multiword(
         target_stress = _stress_string(target)
         target_tail = rhyme_tail(target) if anchor > 0.0 else []
 
-        best_by_phrase: dict[str, MultiwordResult] = {}
+        # Collapse tilings that share the same sound onto one row; keep alternate
+        # spellings as variants under the preferred display form.
+        best_by_ipa: dict[str, MultiwordResult] = {}
+        display_freq: dict[str, float] = {}
         for entry in nodes[n]:
             if entry[1] < min_words:
                 continue
@@ -370,31 +376,54 @@ def find_multiword(
                 num_words=num_words,
             )
 
-            existing = best_by_phrase.get(phrase)
-            if existing is None or base_score > existing.rank_score:
-                best_by_phrase[phrase] = MultiwordResult(
-                    phrase=phrase,
-                    words=words,
-                    num_words=num_words,
-                    ipa="".join(s.ipa for s in segs),
-                    chunks=[(tr.word, tr.alignment) for tr in steps],
-                    alignment=global_alignment,
-                    scores=ScoreComponents(
-                        phonetic_similarity=similarity,
-                        full_similarity=similarity,
-                        tail_similarity=tail_similarity if anchor > 0.0 else similarity,
-                        stress_similarity=stress_similarity,
-                        naturalness=naturalness,
-                        boundary_surprise=surprise,
-                        base_score=base_score,
-                        rank_score=base_score,
-                    ),
+            sound_key = "".join(s.ipa for s in segs)
+            phrase_freq = sum(tr.frequency for tr in steps)
+            candidate = MultiwordResult(
+                phrase=phrase,
+                words=words,
+                num_words=num_words,
+                ipa=sound_key,
+                chunks=[(tr.word, tr.alignment) for tr in steps],
+                alignment=global_alignment,
+                scores=ScoreComponents(
+                    phonetic_similarity=similarity,
+                    full_similarity=similarity,
+                    tail_similarity=tail_similarity if anchor > 0.0 else similarity,
+                    stress_similarity=stress_similarity,
+                    naturalness=naturalness,
+                    boundary_surprise=surprise,
+                    base_score=base_score,
+                    rank_score=base_score,
+                ),
+            )
+            existing = best_by_ipa.get(sound_key)
+            if existing is None:
+                best_by_ipa[sound_key] = candidate
+                display_freq[sound_key] = phrase_freq
+                continue
+            if phrase == existing.phrase:
+                if base_score > existing.rank_score:
+                    candidate.variants = list(existing.variants)
+                    best_by_ipa[sound_key] = candidate
+                    display_freq[sound_key] = phrase_freq
+                continue
+            if display_sort_key(phrase_freq, phrase) < display_sort_key(
+                display_freq[sound_key], existing.phrase
+            ):
+                candidate.variants = merge_variant_forms(
+                    phrase, existing.variants, existing.phrase
+                )
+                best_by_ipa[sound_key] = candidate
+                display_freq[sound_key] = phrase_freq
+            else:
+                existing.variants = merge_variant_forms(
+                    existing.phrase, existing.variants, phrase
                 )
     finally:
         if own_conn:
             conn.close()
 
-    results = sorted(best_by_phrase.values(), key=lambda r: r.rank_score, reverse=True)[
+    results = sorted(best_by_ipa.values(), key=lambda r: r.rank_score, reverse=True)[
         :limit
     ]
 

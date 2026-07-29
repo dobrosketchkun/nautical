@@ -37,3 +37,6 @@ htmlcov/
 Thumbs.db
 *.swp
 from_notes.md
+docs/some_lyrics.txt
+docs/Updates.md
+docs/initial_updates.md

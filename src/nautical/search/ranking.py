@@ -71,3 +71,21 @@ def apply_context_score(base_score: float, theme_fit: float, weight: float) -> f
     bounded_weight = max(0.0, min(1.0, weight))
     normalized_theme = (theme_fit + 1.0) / 2.0
     return (1.0 - bounded_weight) * base_score + bounded_weight * normalized_theme
+
+
+def display_sort_key(frequency: float, form: str) -> tuple:
+    """Lower is better: higher frequency, then shorter spelling, then alphabetical."""
+    return (-frequency, len(form), form)
+
+
+def merge_variant_forms(primary: str, *groups: list[str] | tuple[str, ...] | str) -> list[str]:
+    """Return sorted alternate spellings/phrases, excluding ``primary``."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for group in groups:
+        items = (group,) if isinstance(group, str) else group
+        for item in items:
+            if item != primary and item not in seen:
+                seen.add(item)
+                out.append(item)
+    return sorted(out)

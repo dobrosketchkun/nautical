@@ -42,6 +42,17 @@ def test_multiword_structure(db_path):
         assert all(alignment.pairs for _, alignment in r.chunks)
 
 
+def test_multiword_distinct_ipa(db_path):
+    """U1.1: each result row is a unique sound; variants hold alternate spellings."""
+    results = find_multiword("nautical", limit=20, conn=_conn(db_path))
+    assert results
+    assert len({r.ipa for r in results}) == len(results)
+    for r in results:
+        assert r.phrase not in r.variants
+        assert r.variants == sorted(r.variants)
+        assert len(r.variants) == len(set(r.variants))
+
+
 def test_multiword_discovers_oronyms(db_path):
     # The decoder tiles `nautical` (nɔtəkəl) with real words: high-scoring results
     # include `naught`/`gnaw`/`naughty`-based sound-alikes (`naught a can`,

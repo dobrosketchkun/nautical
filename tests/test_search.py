@@ -52,3 +52,14 @@ def test_results_sorted_and_alignment_present(db_path):
 def test_include_self(db_path):
     results = find_rhymes("stainless", limit=50, include_self=True, conn=_conn(db_path))
     assert "stainless" in [r.word for r in results]
+
+
+def test_rhymes_distinct_ipa(db_path):
+    """U1.1: exact homophones collapse onto one IPA row with variants retained."""
+    results = find_rhymes("stainless", limit=25, conn=_conn(db_path))
+    assert results
+    assert len({r.ipa for r in results}) == len(results)
+    for r in results:
+        assert r.word not in r.variants
+        assert r.variants == sorted(r.variants)
+        assert len(r.variants) == len(set(r.variants))

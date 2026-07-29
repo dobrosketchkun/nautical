@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .. import cache as cache_service
@@ -17,7 +17,7 @@ from ..phonetics.anchor import (
 )
 from ..pronounce import enriched_segment_variants, enriched_segments, tokenize
 from .index import candidate_ids, tail_candidate_ids
-from .ranking import ScoreComponents, rank_base
+from .ranking import ScoreComponents, display_sort_key, merge_variant_forms, rank_base
 
 # Backwards-compatible alias (decoder.py imports this name).
 _segs_from_row = segs_from_stored
@@ -31,6 +31,7 @@ class RhymeResult:
     ipa: str
     alignment: Alignment
     scores: ScoreComponents
+    variants: list[str] = field(default_factory=list)
 
     @property
     def similarity(self) -> float:
@@ -69,6 +70,7 @@ def _result_to_dict(r: RhymeResult) -> dict:
         "ipa": r.ipa,
         "alignment": alignment_to_dict(r.alignment),
         "scores": r.scores.to_dict(),
+        "variants": list(r.variants),
     }
 
 
@@ -80,6 +82,7 @@ def _result_from_dict(d: dict) -> RhymeResult:
         ipa=d["ipa"],
         alignment=alignment_from_dict(d["alignment"]),
         scores=ScoreComponents.from_dict(d["scores"]),
+        variants=list(d.get("variants", [])),
     )
 
 
@@ -189,7 +192,8 @@ def find_rhymes(
 
     query_forms = {text.strip().lower(), *tokenize(text)}
 
-    best: dict[str, RhymeResult] = {}
+    # Collapse exact homophones / variant spellings onto one IPA sound key.
+    best_by_ipa: dict[str, RhymeResult] = {}
     for written_form, frequency, arpabet, ipa_segments, ipa, syllable_count in rows:
         if not include_self and written_form in query_forms:
             continue
@@ -213,27 +217,47 @@ def find_rhymes(
             score.stress_similarity,
             surprise,
         )
-        existing = best.get(written_form)
-        if existing is None or base_score > existing.rank_score:
-            best[written_form] = RhymeResult(
-                word=written_form,
-                frequency=frequency or 0.0,
-                syllable_count=syllable_count or 0,
-                ipa=ipa or "",
-                alignment=score.full_alignment,
-                scores=ScoreComponents(
-                    phonetic_similarity=score.anchored_similarity,
-                    full_similarity=score.full_similarity,
-                    tail_similarity=score.tail_similarity,
-                    stress_similarity=score.stress_similarity,
-                    boundary_surprise=surprise,
-                    base_score=base_score,
-                    rank_score=base_score,
-                ),
+        sound_key = ipa or "".join(s.ipa for s in cand_segs)
+        freq = frequency or 0.0
+        candidate = RhymeResult(
+            word=written_form,
+            frequency=freq,
+            syllable_count=syllable_count or 0,
+            ipa=sound_key,
+            alignment=score.full_alignment,
+            scores=ScoreComponents(
+                phonetic_similarity=score.anchored_similarity,
+                full_similarity=score.full_similarity,
+                tail_similarity=score.tail_similarity,
+                stress_similarity=score.stress_similarity,
+                boundary_surprise=surprise,
+                base_score=base_score,
+                rank_score=base_score,
+            ),
+        )
+        existing = best_by_ipa.get(sound_key)
+        if existing is None:
+            best_by_ipa[sound_key] = candidate
+            continue
+        if written_form == existing.word:
+            if base_score > existing.rank_score:
+                candidate.variants = list(existing.variants)
+                best_by_ipa[sound_key] = candidate
+            continue
+        if display_sort_key(freq, written_form) < display_sort_key(
+            existing.frequency, existing.word
+        ):
+            candidate.variants = merge_variant_forms(
+                written_form, existing.variants, existing.word
+            )
+            best_by_ipa[sound_key] = candidate
+        else:
+            existing.variants = merge_variant_forms(
+                existing.word, existing.variants, written_form
             )
 
     results = sorted(
-        best.values(), key=lambda r: (r.rank_score, r.frequency), reverse=True
+        best_by_ipa.values(), key=lambda r: (r.rank_score, r.frequency), reverse=True
     )[:limit]
 
     if cache_key is not None:
