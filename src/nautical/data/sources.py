@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Iterator
 
 import cmudict
-from wordfreq import word_frequency
+from wordfreq import word_frequency, zipf_frequency
 
 # ARPAbet vowel/phone helpers live in nautical.phonology.arpabet.
 
@@ -28,3 +28,8 @@ def iter_lexemes() -> Iterator[tuple[str, list[list[str]]]]:
 def get_frequency(word: str) -> float:
     """Return the English unigram frequency of ``word`` (0.0 if unknown)."""
     return word_frequency(word, "en")
+
+
+def get_zipf(word: str) -> float:
+    """Return the English Zipf frequency of ``word`` (0.0 if unknown)."""
+    return zipf_frequency(word, "en")

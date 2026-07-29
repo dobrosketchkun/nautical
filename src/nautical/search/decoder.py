@@ -21,6 +21,7 @@ from pathlib import Path
 
 from .. import cache as cache_service
 from ..config import DB_PATH
+from ..db.quality import DEFAULT_MIN_QUALITY
 from ..phonetics.align import (
     Alignment,
     Seg,
@@ -47,6 +48,7 @@ class MultiwordResult:
     alignment: Alignment
     scores: ScoreComponents
     variants: list[str] = field(default_factory=list)
+    quality: float = 0.0
 
     @property
     def similarity(self) -> float:
@@ -88,6 +90,7 @@ def _result_to_dict(r: MultiwordResult) -> dict:
         "alignment": alignment_to_dict(r.alignment),
         "scores": r.scores.to_dict(),
         "variants": list(r.variants),
+        "quality": r.quality,
     }
 
 
@@ -101,6 +104,7 @@ def _result_from_dict(d: dict) -> MultiwordResult:
         alignment=alignment_from_dict(d["alignment"]),
         scores=ScoreComponents.from_dict(d["scores"]),
         variants=list(d.get("variants", [])),
+        quality=float(d.get("quality", 0.0)),
     )
 
 
@@ -117,8 +121,9 @@ def multiword_cache_key(
     exclude: frozenset[str] | None = None,
     diversity: float = 0.35,
     prefix_cap: int = 3,
+    min_quality: float = DEFAULT_MIN_QUALITY,
 ) -> str:
-    """Cache key for a multi-word decode (phonetic + diversity params)."""
+    """Cache key for a multi-word decode (phonetic + diversity + quality params)."""
     return cache_service.make_key(
         "multiword",
         text,
@@ -134,6 +139,7 @@ def multiword_cache_key(
             "exclude": sorted(exclude) if exclude else [],
             "diversity": diversity,
             "prefix_cap": prefix_cap,
+            "min_quality": min_quality,
         },
     )
 
@@ -142,6 +148,7 @@ def multiword_cache_key(
 class _Transition:
     word: str
     frequency: float
+    quality: float
     length: int  # target segments consumed
     cost: float
     segs: list[Seg]
@@ -163,6 +170,7 @@ def _position_transitions(
     strictness: float,
     skip_words: set[str],
     word_boundary_leniency: bool = True,
+    min_quality: float = DEFAULT_MIN_QUALITY,
 ) -> list[_Transition]:
     """Candidate word transitions starting at target position ``i``."""
     n = len(target)
@@ -173,17 +181,17 @@ def _position_transitions(
 
     placeholders = ",".join("?" * len(keys))
     rows = conn.execute(
-        f"SELECT l.written_form, l.frequency, p.arpabet, p.ipa_segments "
+        f"SELECT l.written_form, l.frequency, l.quality, p.arpabet, p.ipa_segments "
         f"FROM decode_onset d "
         f"JOIN pronunciation p ON p.id = d.pronunciation_id "
         f"JOIN lexeme l ON l.id = p.lexeme_id "
-        f"WHERE d.onset_key IN ({placeholders}) "
+        f"WHERE d.onset_key IN ({placeholders}) AND l.quality >= ? "
         f"GROUP BY p.id",
-        keys,
+        (*keys, min_quality),
     ).fetchall()
 
     transitions: list[_Transition] = []
-    for written_form, frequency, arpabet, ipa_segments in rows:
+    for written_form, frequency, quality, arpabet, ipa_segments in rows:
         if written_form in skip_words:
             continue
         cand_segs = _segs_from_row(arpabet, ipa_segments)
@@ -204,6 +212,7 @@ def _position_transitions(
                 _Transition(
                     word=written_form,
                     frequency=frequency or 0.0,
+                    quality=float(quality or 0.0),
                     length=length,
                     cost=alignment.total_cost,
                     segs=cand_segs,
@@ -257,6 +266,7 @@ def find_multiword(
     exclude: frozenset[str] | None = None,
     diversity: float = 0.35,
     prefix_cap: int = 3,
+    min_quality: float = DEFAULT_MIN_QUALITY,
     use_cache: bool = True,
     db_path: Path | None = None,
     cache_db_path: Path | None = None,
@@ -274,10 +284,10 @@ def find_multiword(
 
     ``diversity`` (0 = pure rank order) and ``prefix_cap`` apply presentation-
     layer selection after IPA collapse so similar prefixes do not monopolize
-    the top rows.
+    the top rows. ``min_quality`` gates the decode inventory (0 = full lexicon).
 
-    Results are cached (keyed on the phonetic + diversity params) unless
-    ``use_cache`` is False or an explicit ``conn`` is supplied.
+    Results are cached (keyed on the phonetic + diversity + quality params)
+    unless ``use_cache`` is False or an explicit ``conn`` is supplied.
     """
     exclude = exclude or frozenset()
     cache_key = None
@@ -285,7 +295,7 @@ def find_multiword(
         cache_key = multiword_cache_key(
             text, limit, beam_width, cand_per_pos, max_words, min_words,
             strictness, anchor, word_boundary_leniency, exclude,
-            diversity, prefix_cap,
+            diversity, prefix_cap, min_quality,
         )
         cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
@@ -322,7 +332,7 @@ def find_multiword(
             if not transitions[i]:
                 transitions[i] = _position_transitions(
                     conn, target, i, cand_per_pos, strictness, skip_words,
-                    word_boundary_leniency,
+                    word_boundary_leniency, min_quality,
                 )
 
             pos_transitions = transitions[i]
@@ -390,6 +400,7 @@ def find_multiword(
 
             sound_key = "".join(s.ipa for s in segs)
             phrase_freq = sum(tr.frequency for tr in steps)
+            phrase_quality = min(tr.quality for tr in steps)
             candidate = MultiwordResult(
                 phrase=phrase,
                 words=words,
@@ -407,6 +418,7 @@ def find_multiword(
                     base_score=base_score,
                     rank_score=base_score,
                 ),
+                quality=phrase_quality,
             )
             existing = best_by_ipa.get(sound_key)
             if existing is None:

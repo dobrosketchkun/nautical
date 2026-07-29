@@ -8,6 +8,7 @@ from pathlib import Path
 
 from .. import cache as cache_service
 from ..config import DB_PATH
+from ..db.quality import DEFAULT_MIN_QUALITY
 from ..phonetics.align import Alignment, alignment_from_dict, alignment_to_dict
 from ..phonetics.anchor import (
     anchored_score,
@@ -32,6 +33,7 @@ class RhymeResult:
     alignment: Alignment
     scores: ScoreComponents
     variants: list[str] = field(default_factory=list)
+    quality: float = 0.0
 
     @property
     def similarity(self) -> float:
@@ -71,6 +73,7 @@ def _result_to_dict(r: RhymeResult) -> dict:
         "alignment": alignment_to_dict(r.alignment),
         "scores": r.scores.to_dict(),
         "variants": list(r.variants),
+        "quality": r.quality,
     }
 
 
@@ -83,6 +86,7 @@ def _result_from_dict(d: dict) -> RhymeResult:
         alignment=alignment_from_dict(d["alignment"]),
         scores=ScoreComponents.from_dict(d["scores"]),
         variants=list(d.get("variants", [])),
+        quality=float(d.get("quality", 0.0)),
     )
 
 
@@ -96,8 +100,9 @@ def rhymes_cache_key(
     word_boundary_leniency: bool = True,
     multi_variant: bool = True,
     exclude: frozenset[str] | None = None,
+    min_quality: float = DEFAULT_MIN_QUALITY,
 ) -> str:
-    """Cache key for a single-word search (phonetic params only)."""
+    """Cache key for a single-word search (phonetic + quality params)."""
     return cache_service.make_key(
         "rhymes",
         text,
@@ -110,6 +115,7 @@ def rhymes_cache_key(
             "word_boundary_leniency": word_boundary_leniency,
             "multi_variant": multi_variant,
             "exclude": sorted(exclude) if exclude else [],
+            "min_quality": min_quality,
         },
     )
 
@@ -124,6 +130,7 @@ def find_rhymes(
     word_boundary_leniency: bool = True,
     multi_variant: bool = True,
     exclude: frozenset[str] | None = None,
+    min_quality: float = DEFAULT_MIN_QUALITY,
     use_cache: bool = True,
     db_path: Path | None = None,
     cache_db_path: Path | None = None,
@@ -139,16 +146,18 @@ def find_rhymes(
     ``multi_variant`` scores the query's every pronunciation variant and keeps the
     best per candidate; ``word_boundary_leniency`` makes word-final consonants
     cheap to drop; ``exclude`` drops those words from the results before limiting.
+    ``min_quality`` gates the candidate inventory (0 = full lexicon).
 
-    Results are cached (keyed on the phonetic params) unless ``use_cache`` is
-    False or an explicit ``conn`` is supplied (tests pass their own DB).
+    Results are cached (keyed on the phonetic + quality params) unless
+    ``use_cache`` is False or an explicit ``conn`` is supplied (tests pass their
+    own DB).
     """
     exclude = exclude or frozenset()
     cache_key = None
     if use_cache and conn is None:
         cache_key = rhymes_cache_key(
             text, limit, pool, strictness, anchor, include_self,
-            word_boundary_leniency, multi_variant, exclude,
+            word_boundary_leniency, multi_variant, exclude, min_quality,
         )
         cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
@@ -180,11 +189,11 @@ def find_rhymes(
         id_list = list(ids)
         placeholders = ",".join("?" * len(id_list))
         rows = conn.execute(
-            f"SELECT l.written_form, l.frequency, p.arpabet, p.ipa_segments, "
-            f"p.ipa, p.syllable_count "
+            f"SELECT l.written_form, l.frequency, l.quality, p.arpabet, "
+            f"p.ipa_segments, p.ipa, p.syllable_count "
             f"FROM pronunciation p JOIN lexeme l ON l.id = p.lexeme_id "
-            f"WHERE p.id IN ({placeholders})",
-            id_list,
+            f"WHERE p.id IN ({placeholders}) AND l.quality >= ?",
+            (*id_list, min_quality),
         ).fetchall()
     finally:
         if own_conn:
@@ -194,7 +203,15 @@ def find_rhymes(
 
     # Collapse exact homophones / variant spellings onto one IPA sound key.
     best_by_ipa: dict[str, RhymeResult] = {}
-    for written_form, frequency, arpabet, ipa_segments, ipa, syllable_count in rows:
+    for (
+        written_form,
+        frequency,
+        quality,
+        arpabet,
+        ipa_segments,
+        ipa,
+        syllable_count,
+    ) in rows:
         if not include_self and written_form in query_forms:
             continue
         if written_form in exclude:
@@ -234,6 +251,7 @@ def find_rhymes(
                 base_score=base_score,
                 rank_score=base_score,
             ),
+            quality=float(quality or 0.0),
         )
         existing = best_by_ipa.get(sound_key)
         if existing is None:

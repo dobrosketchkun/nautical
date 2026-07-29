@@ -14,6 +14,7 @@ from . import exclude as exclude_service
 from . import pronounce as pronounce_service
 from .config import SCHEMA_VERSION, NauticalPaths
 from .db import loader
+from .db.quality import DEFAULT_MIN_QUALITY
 from .errors import NotInitializedError
 from .phonetics import distance as distance_service
 from .search import decoder as multiword_search
@@ -88,6 +89,7 @@ class Nautical:
                     "lexeme_count",
                     "pronunciation_count",
                     "lexeme_with_frequency",
+                    "lexeme_quality_ge_default",
                     "phoneme_ngram_count",
                     "decode_onset_count",
                     "rhyme_ngram_count",
@@ -196,6 +198,7 @@ class Nautical:
         exclude: str | frozenset[str] | None = None,
         diversity: float = 0.35,
         prefix_cap: int = 3,
+        min_quality: float = DEFAULT_MIN_QUALITY,
         use_cache: bool = True,
     ) -> SearchResponse:
         self._require_db()
@@ -233,6 +236,7 @@ class Nautical:
                 exclusions,
                 decode_diversity,
                 decode_prefix_cap,
+                min_quality,
             )
         else:
             cache_key = word_search.rhymes_cache_key(
@@ -245,6 +249,7 @@ class Nautical:
                 word_boundary_leniency,
                 multi_variant,
                 exclusions,
+                min_quality,
             )
         cached = use_cache and (
             cache_service.cache_get(cache_key, self.paths.cache_db_path) is not None
@@ -265,6 +270,7 @@ class Nautical:
                 exclude=exclusions,
                 diversity=decode_diversity,
                 prefix_cap=decode_prefix_cap,
+                min_quality=min_quality,
                 use_cache=use_cache,
                 db_path=self.paths.db_path,
                 cache_db_path=self.paths.cache_db_path,
@@ -280,11 +286,11 @@ class Nautical:
                 word_boundary_leniency=word_boundary_leniency,
                 multi_variant=multi_variant,
                 exclude=exclusions,
+                min_quality=min_quality,
                 use_cache=use_cache,
                 db_path=self.paths.db_path,
                 cache_db_path=self.paths.cache_db_path,
             )
-
         if min_similarity > 0.0:
             candidates = [r for r in candidates if r.similarity >= min_similarity]
         if context_terms and vectors is not None:

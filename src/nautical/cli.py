@@ -17,6 +17,7 @@ from . import exclude as exclude_service
 from . import pronounce as pronounce_service
 from .client import Nautical
 from .db import loader
+from .db.quality import DEFAULT_MIN_QUALITY
 from .errors import NauticalError, NotInitializedError
 from .phonetics import distance as distance_service
 from .search import decoder as multiword_search
@@ -157,6 +158,13 @@ def stats() -> None:
     table.add_row(
         "Lexemes with frequency", f"{int(info.get('lexeme_with_frequency', 0)):,}"
     )
+    if "lexeme_quality_ge_default" in info:
+        table.add_row(
+            f"Lexemes quality ≥ {DEFAULT_MIN_QUALITY}",
+            f"{int(info.get('lexeme_quality_ge_default', 0)):,}",
+        )
+    if "lexeme_mean_quality" in info:
+        table.add_row("Mean quality", info.get("lexeme_mean_quality", "?"))
     table.add_row("DB size", f"{size_mb:.1f} MB")
     table.add_row("Schema version", info.get("schema_version", "?"))
     table.add_row("Built at", info.get("built_at", "?"))
@@ -534,6 +542,13 @@ def rhymes(
         min=0,
         help="Multi-word only: max results sharing the same first word (0 = no cap).",
     ),
+    min_quality: float = typer.Option(
+        DEFAULT_MIN_QUALITY,
+        "--quality",
+        min=0.0,
+        max=1.0,
+        help="Min lexicon quality (0 = admit junk spellings / rare names).",
+    ),
     as_json: bool = typer.Option(False, "--json", help="Emit JSON instead of a table."),
 ) -> None:
     """Find single-word (or, with --multiword, multi-word) sound-alikes."""
@@ -560,6 +575,7 @@ def rhymes(
             exclude=exclude,
             diversity=diversity,
             prefix_cap=prefix_cap,
+            min_quality=min_quality,
             use_cache=not no_cache,
             as_json=as_json,
         )
@@ -583,6 +599,7 @@ def rhymes(
             word_boundary_leniency=word_boundary_leniency,
             multi_variant=multi_variant,
             exclude=exclude,
+            min_quality=min_quality,
             use_cache=not no_cache,
         )
     except NauticalError as exc:
@@ -616,6 +633,7 @@ def rhymes(
                         "syllable_count": r.syllable_count,
                         "ipa": r.ipa,
                         "variants": list(r.variants),
+                        "quality": round(r.quality, 4),
                         "alignment": _alignment_to_json(r.alignment),
                         **(
                             {"theme_fit": round(r.theme_fit, 4)}
@@ -647,6 +665,7 @@ def rhymes(
         table.add_column("Theme", justify="right", style="green")
     table.add_column("Stress", justify="right")
     table.add_column("Bound", justify="right")
+    table.add_column("Qual", justify="right")
     table.add_column("Syll", justify="right")
     table.add_column("IPA")
     for i, r in enumerate(results, start=1):
@@ -663,6 +682,7 @@ def rhymes(
         row += [
             f"{r.stress_similarity:.2f}",
             f"{r.boundary_surprise:.2f}",
+            f"{r.quality:.2f}",
             str(r.syllable_count),
             r.ipa,
         ]
@@ -697,6 +717,7 @@ def _rhymes_multiword(
     exclude: str | None = None,
     diversity: float = 0.35,
     prefix_cap: int = 3,
+    min_quality: float = DEFAULT_MIN_QUALITY,
     use_cache: bool = True,
     as_json: bool = False,
 ) -> None:
@@ -720,6 +741,7 @@ def _rhymes_multiword(
             exclude=exclude,
             diversity=diversity,
             prefix_cap=prefix_cap,
+            min_quality=min_quality,
             use_cache=use_cache,
         )
     except NauticalError as exc:
@@ -752,6 +774,7 @@ def _rhymes_multiword(
                         "num_words": r.num_words,
                         "ipa": r.ipa,
                         "variants": list(r.variants),
+                        "quality": round(r.quality, 4),
                         "alignment": _alignment_to_json(r.alignment),
                         "chunks": [
                             {
@@ -789,6 +812,7 @@ def _rhymes_multiword(
         table.add_column("Theme", justify="right", style="green")
     table.add_column("Stress", justify="right")
     table.add_column("Bound", justify="right")
+    table.add_column("Qual", justify="right")
     table.add_column("Words", justify="right")
     table.add_column("IPA")
     for i, r in enumerate(results, start=1):
@@ -804,6 +828,7 @@ def _rhymes_multiword(
         row += [
             f"{r.stress_similarity:.2f}",
             f"{r.boundary_surprise:.2f}",
+            f"{r.quality:.2f}",
             str(r.num_words),
             r.ipa,
         ]

@@ -9,8 +9,17 @@ CREATE TABLE IF NOT EXISTS meta (
 CREATE TABLE IF NOT EXISTS lexeme (
     id           INTEGER PRIMARY KEY,
     written_form TEXT UNIQUE NOT NULL,   -- UNIQUE creates the lookup index
-    frequency    REAL NOT NULL DEFAULT 0
+    frequency    REAL NOT NULL DEFAULT 0,
+    zipf         REAL NOT NULL DEFAULT 0,
+    pos_tag      TEXT,
+    is_possessive INTEGER NOT NULL DEFAULT 0,
+    is_abbrev    INTEGER NOT NULL DEFAULT 0,
+    is_propn     INTEGER NOT NULL DEFAULT 0,
+    is_variant   INTEGER NOT NULL DEFAULT 0,
+    quality      REAL NOT NULL DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS idx_lexeme_quality ON lexeme(quality);
 
 CREATE TABLE IF NOT EXISTS pronunciation (
     id             INTEGER PRIMARY KEY,

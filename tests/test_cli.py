@@ -40,6 +40,7 @@ def test_rhymes_help_exposes_seed_workflow():
     assert "--seed-limit" in result.stdout
     assert "--diversity" in result.stdout
     assert "--prefix-cap" in result.stdout
+    assert "--quality" in result.stdout
 
 
 def test_seed_expansion_and_json_score_contract(monkeypatch):
@@ -67,6 +68,7 @@ def test_seed_expansion_and_json_score_contract(monkeypatch):
     assert payload[0]["boundary_surprise"] == 0.25
     assert payload[0]["context_terms"] == ["bank", "money"]
     assert payload[0]["variants"] == []
+    assert "quality" in payload[0]
     assert "alignment" in payload[0]
 
 

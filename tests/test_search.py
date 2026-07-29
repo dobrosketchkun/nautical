@@ -44,8 +44,8 @@ def test_stainless_finds_rhymes(db_path):
 def test_results_sorted_and_alignment_present(db_path):
     results = find_rhymes("stainless", limit=20, conn=_conn(db_path))
     assert results
-    sims = [r.similarity for r in results]
-    assert sims == sorted(sims, reverse=True)
+    ranks = [r.rank_score for r in results]
+    assert ranks == sorted(ranks, reverse=True)
     assert all(r.alignment is not None and r.alignment.pairs for r in results)
 
 
