@@ -34,3 +34,8 @@ where = ["src"]
 [tool.setuptools.package-data]
 "nautical.db" = ["*.sql"]
 "nautical.resources" = ["*.json"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: cold-query latency budgets (U4 acceptance)",
+]

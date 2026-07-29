@@ -111,7 +111,7 @@ def test_build_assigns_quality_columns(db_path):
 
 def test_multiword_default_quality_drops_junk_spellings(db_path):
     junk = {"noe", "noh", "nau", "stelljes"}
-    results = find_multiword("nautical", limit=20, conn=_conn(db_path))
+    results, _ = find_multiword("nautical", limit=20, conn=_conn(db_path))
     assert results
     tokens = {w for r in results for w in r.words}
     assert tokens.isdisjoint(junk)
@@ -149,10 +149,10 @@ def test_multiword_quality_zero_admits_junk_inventory(db_path):
 
 
 def test_single_word_respects_min_quality(db_path):
-    default = find_rhymes("no", limit=50, conn=_conn(db_path))
+    default, _ = find_rhymes("no", limit=50, conn=_conn(db_path))
     words_default = {r.word for r in default}
     assert "noe" not in words_default
-    open_pool = find_rhymes("no", limit=100, min_quality=0.0, conn=_conn(db_path))
+    open_pool, _ = find_rhymes("no", limit=100, min_quality=0.0, conn=_conn(db_path))
     words_open = {r.word for r in open_pool}
     # At quality 0, a junk homophone of "no" should be admissible somewhere.
     assert words_open & {"noe", "noh", "nau"} or any(

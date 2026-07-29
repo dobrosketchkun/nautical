@@ -108,15 +108,39 @@ def feature_vector(segment: str) -> list[float] | None:
     return _lookup(segment)  # segment outside our inventory (e.g. odd g2p output)
 
 
+def _distance_from_vectors(va: list[float], vb: list[float]) -> float:
+    total = sum(abs(x - y) for x, y in zip(va, vb))
+    return total / (2 * NUM_FEATURES)
+
+
+@lru_cache(maxsize=1)
+def _pairwise_distance_table() -> dict[tuple[str, str], float]:
+    """Precompute inventory×inventory feature distances (U4.1)."""
+    vectors = _vector_map()
+    segments = list(vectors.keys())
+    table: dict[tuple[str, str], float] = {}
+    for a in segments:
+        va = vectors[a]
+        for b in segments:
+            if a == b:
+                table[(a, b)] = 0.0
+            else:
+                table[(a, b)] = _distance_from_vectors(va, vectors[b])
+    return table
+
+
 def feature_distance(a: str, b: str) -> float:
     """Normalized articulatory distance between two segments in ``[0, 1]``.
 
     0.0 for identical segments; 1.0 if either segment is unknown to PanPhon.
+    Inventory pairs use a precomputed table; OOV segments fall back to vectors.
     """
     if a == b:
         return 0.0
+    cached = _pairwise_distance_table().get((a, b))
+    if cached is not None:
+        return cached
     va, vb = feature_vector(a), feature_vector(b)
     if va is None or vb is None:
         return 1.0
-    total = sum(abs(x - y) for x, y in zip(va, vb))
-    return total / (2 * NUM_FEATURES)
+    return _distance_from_vectors(va, vb)

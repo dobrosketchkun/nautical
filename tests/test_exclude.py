@@ -37,10 +37,10 @@ def test_resolve_merges_file_and_flag(tmp_path):
 
 
 def test_find_rhymes_drops_excluded_word(db_path):
-    baseline = find_rhymes("stainless", limit=200, conn=_conn(db_path))
+    baseline, _ = find_rhymes("stainless", limit=200, conn=_conn(db_path))
     words = [r.word for r in baseline]
     assert "brainless" in words
-    filtered = find_rhymes(
+    filtered, _ = find_rhymes(
         "stainless", limit=200, exclude=frozenset({"brainless"}), conn=_conn(db_path)
     )
     assert "brainless" not in [r.word for r in filtered]
@@ -48,10 +48,10 @@ def test_find_rhymes_drops_excluded_word(db_path):
 
 
 def test_find_multiword_drops_excluded_word(db_path):
-    baseline = find_multiword("nautical", limit=50, conn=_conn(db_path))
+    baseline, _ = find_multiword("nautical", limit=50, conn=_conn(db_path))
     assert baseline, "expected at least one tiling"
     victim = baseline[0].words[0]
-    filtered = find_multiword(
+    filtered, _ = find_multiword(
         "nautical", limit=50, exclude=frozenset({victim}), conn=_conn(db_path)
     )
     assert all(victim not in r.words for r in filtered)

@@ -185,7 +185,7 @@ def evaluate_pair(
 
     if mode == "multiword":
         anchor = _parse_anchor(anchor_raw, default=0.0)
-        results = multiword_search.find_multiword(
+        results, _ = multiword_search.find_multiword(
             query,
             limit=fetch_limit,
             anchor=anchor,
@@ -200,7 +200,7 @@ def evaluate_pair(
         match_attr = "phrase"
     else:
         anchor = _parse_anchor(anchor_raw, default=0.5)
-        results = word_search.find_rhymes(
+        results, _ = word_search.find_rhymes(
             query,
             limit=fetch_limit,
             anchor=anchor,
@@ -270,7 +270,7 @@ def measure_diversity(
 ) -> DiversityMetrics:
     """Distinct-IPA / distinct-first-word ratios over a fixed multiword canary."""
     w = weights if weights is not None else DEFAULT_WEIGHTS
-    results = multiword_search.find_multiword(
+    results, _ = multiword_search.find_multiword(
         query,
         limit=top_k,
         diversity=0.35,

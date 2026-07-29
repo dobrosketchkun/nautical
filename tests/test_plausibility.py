@@ -74,7 +74,7 @@ def test_phrase_naturalness_blend_reports_components():
 
 
 def test_multiword_drops_no_to_class_from_top10(db_path):
-    results = find_multiword("nautical", limit=10, conn=_conn(db_path))
+    results, _ = find_multiword("nautical", limit=10, conn=_conn(db_path))
     assert results
     junk = re.compile(r"^(no|know) to\b")
     top10 = [r.phrase for r in results]

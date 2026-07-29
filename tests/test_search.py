@@ -27,13 +27,13 @@ def test_segment_ngrams_short_fallback():
 def test_not_a_cult_finds_nautical(db_path):
     # A boundary-free whole-phrase echo, so it surfaces under full-span anchoring
     # (tail anchoring instead favors words ending in the -ult rhyme).
-    results = find_rhymes("not a cult", limit=15, anchor=0.0, conn=_conn(db_path))
+    results, _ = find_rhymes("not a cult", limit=15, anchor=0.0, conn=_conn(db_path))
     words = [r.word for r in results]
     assert "nautical" in words, words
 
 
 def test_stainless_finds_rhymes(db_path):
-    results = find_rhymes("stainless", limit=200, conn=_conn(db_path))
+    results, _ = find_rhymes("stainless", limit=200, conn=_conn(db_path))
     words = [r.word for r in results]
     assert "brainless" in words, words
     assert "painless" in words, words
@@ -42,7 +42,7 @@ def test_stainless_finds_rhymes(db_path):
 
 
 def test_results_sorted_and_alignment_present(db_path):
-    results = find_rhymes("stainless", limit=20, conn=_conn(db_path))
+    results, _ = find_rhymes("stainless", limit=20, conn=_conn(db_path))
     assert results
     ranks = [r.rank_score for r in results]
     assert ranks == sorted(ranks, reverse=True)
@@ -50,13 +50,13 @@ def test_results_sorted_and_alignment_present(db_path):
 
 
 def test_include_self(db_path):
-    results = find_rhymes("stainless", limit=50, include_self=True, conn=_conn(db_path))
+    results, _ = find_rhymes("stainless", limit=50, include_self=True, conn=_conn(db_path))
     assert "stainless" in [r.word for r in results]
 
 
 def test_rhymes_distinct_ipa(db_path):
     """U1.1: exact homophones collapse onto one IPA row with variants retained."""
-    results = find_rhymes("stainless", limit=25, conn=_conn(db_path))
+    results, _ = find_rhymes("stainless", limit=25, conn=_conn(db_path))
     assert results
     assert len({r.ipa for r in results}) == len(results)
     for r in results:

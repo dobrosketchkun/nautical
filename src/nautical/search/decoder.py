@@ -25,6 +25,7 @@ from ..phonetics.align import (
     Alignment,
     Seg,
     align,
+    align_cost,
     alignment_from_dict,
     alignment_to_dict,
 )
@@ -38,6 +39,9 @@ from .plausibility import load_pos_lm, phrase_naturalness
 from .ranking import ScoreComponents, display_sort_key, merge_variant_forms, rank_base
 
 _segs_from_row = segs_from_stored
+
+# When True, `_position_transitions` uses full `align` (test equivalence only).
+_FORCE_FULL_ALIGN_TRANSITIONS = False
 
 @dataclass
 class MultiwordResult:
@@ -161,7 +165,7 @@ class _Transition:
     length: int  # target segments consumed
     cost: float
     segs: list[Seg]
-    alignment: Alignment
+    alignment: Alignment | None = None
 
 
 def _position_transitions(
@@ -209,13 +213,25 @@ def _position_transitions(
         for length in (p_len - 1, p_len, p_len + 1):
             if length < 1 or i + length > n:
                 continue
-            alignment = align(
-                cand_segs,
-                target[i : i + length],
-                strictness=strictness,
-                word_boundary_leniency=word_boundary_leniency,
-                weights=w,
-            )
+            span = target[i : i + length]
+            if _FORCE_FULL_ALIGN_TRANSITIONS:
+                alignment = align(
+                    cand_segs,
+                    span,
+                    strictness=strictness,
+                    word_boundary_leniency=word_boundary_leniency,
+                    weights=w,
+                )
+                cost = alignment.total_cost
+            else:
+                alignment = None
+                cost = align_cost(
+                    cand_segs,
+                    span,
+                    strictness=strictness,
+                    word_boundary_leniency=word_boundary_leniency,
+                    weights=w,
+                )
             transitions.append(
                 _Transition(
                     word=written_form,
@@ -223,7 +239,7 @@ def _position_transitions(
                     quality=float(quality or 0.0),
                     pos_tag=pos_tag or "",
                     length=length,
-                    cost=alignment.total_cost,
+                    cost=cost,
                     segs=cand_segs,
                     alignment=alignment,
                 )
@@ -234,6 +250,41 @@ def _position_transitions(
     # frequency influences only the final naturalness ranking.
     transitions.sort(key=lambda t: t.cost)
     return transitions[:cand_per_pos]
+
+
+def _materialize_alignments(
+    steps: list[_Transition],
+    target: list[Seg],
+    *,
+    strictness: float,
+    word_boundary_leniency: bool,
+    weights: ScoringWeights,
+) -> list[_Transition]:
+    """Fill full alignments on beam survivors that only carried a cost."""
+    out: list[_Transition] = []
+    pos = 0
+    for tr in steps:
+        if tr.alignment is None:
+            alignment = align(
+                tr.segs,
+                target[pos : pos + tr.length],
+                strictness=strictness,
+                word_boundary_leniency=word_boundary_leniency,
+                weights=weights,
+            )
+            tr = _Transition(
+                word=tr.word,
+                frequency=tr.frequency,
+                quality=tr.quality,
+                pos_tag=tr.pos_tag,
+                length=tr.length,
+                cost=tr.cost,
+                segs=tr.segs,
+                alignment=alignment,
+            )
+        out.append(tr)
+        pos += tr.length
+    return out
 
 
 # A DP entry is a compact tuple so the beam can be wide without copying path
@@ -281,8 +332,8 @@ def find_multiword(
     cache_db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
     weights: ScoringWeights | None = None,
-) -> list[MultiwordResult]:
-    """Return ranked multi-word sequences that sound like ``text``.
+) -> tuple[list[MultiwordResult], bool]:
+    """Return ``(ranked multi-word sequences, was_cached)``.
 
     ``anchor`` (0 = full-span, 1 = tail-anchored) blends the whole-tiling
     similarity with a rhyme-tail similarity so ``--anchor tail`` biases toward
@@ -324,7 +375,7 @@ def find_multiword(
         )
         cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
-            return [_result_from_dict(d) for d in cached]
+            return [_result_from_dict(d) for d in cached], True
 
     own_conn = conn is None
     if own_conn:
@@ -333,7 +384,7 @@ def find_multiword(
         target = enriched_segments(text, conn=conn)
         n = len(target)
         if n == 0:
-            return []
+            return [], False
 
         input_tokens = tokenize(text)
         skip_words = {text.strip().lower()} | set(exclude)
@@ -404,6 +455,13 @@ def find_multiword(
             if words == input_tokens:
                 continue
             phrase = " ".join(words)
+            steps = _materialize_alignments(
+                steps,
+                target,
+                strictness=strictness,
+                word_boundary_leniency=word_boundary_leniency,
+                weights=w,
+            )
 
             segs = [s for tr in steps for s in tr.segs]
             similarity = max(0.0, 1.0 - entry[0] / n)
@@ -450,7 +508,7 @@ def find_multiword(
                 words=words,
                 num_words=num_words,
                 ipa=sound_key,
-                chunks=[(tr.word, tr.alignment) for tr in steps],
+                chunks=[(tr.word, tr.alignment) for tr in steps if tr.alignment is not None],
                 alignment=global_alignment,
                 scores=ScoreComponents(
                     phonetic_similarity=similarity,
@@ -503,4 +561,4 @@ def find_multiword(
         cache_service.cache_put(
             cache_key, [_result_to_dict(r) for r in results], db_path=cache_db_path
         )
-    return results
+    return results, False

@@ -47,7 +47,7 @@ def test_put_get_clear_roundtrip(cache_db):
 def test_rhyme_result_roundtrip_preserves_alignment(db_path, cache_db):
     conn = _conn(db_path)
     try:
-        results = word_search.find_rhymes("stainless", limit=5, conn=conn)
+        results, _ = word_search.find_rhymes("stainless", limit=5, conn=conn)
     finally:
         conn.close()
     assert results
@@ -73,7 +73,7 @@ def test_rhyme_result_roundtrip_preserves_alignment(db_path, cache_db):
 def test_multiword_result_roundtrip_preserves_chunks(db_path, cache_db):
     conn = _conn(db_path)
     try:
-        results = multiword_search.find_multiword(
+        results, _ = multiword_search.find_multiword(
             "stainless", limit=3, beam_width=40, cand_per_pos=60, conn=conn
         )
     finally:
@@ -105,8 +105,8 @@ def test_find_rhymes_deterministic(db_path):
     """Same query yields the same ranking (the property caching relies on)."""
     conn = _conn(db_path)
     try:
-        first = word_search.find_rhymes("stainless", limit=10, conn=conn)
-        second = word_search.find_rhymes("stainless", limit=10, conn=conn)
+        first, _ = word_search.find_rhymes("stainless", limit=10, conn=conn)
+        second, _ = word_search.find_rhymes("stainless", limit=10, conn=conn)
     finally:
         conn.close()
     assert [r.word for r in first] == [r.word for r in second]

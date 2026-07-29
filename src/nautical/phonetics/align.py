@@ -204,3 +204,49 @@ def align(
 
     pairs.reverse()
     return Alignment(pairs=pairs, total_cost=dp[n][m])
+
+
+def align_cost(
+    a: list[Seg],
+    b: list[Seg],
+    strictness: float = 0.5,
+    word_boundary_leniency: bool = True,
+    weights: ScoringWeights | None = None,
+) -> float:
+    """Return only the total alignment cost (no traceback).
+
+    Same DP recurrence as :func:`align`, using a flat cost buffer. Used by the
+    multi-word beam, which only needs a number until final explanations.
+    """
+    w = weights if weights is not None else DEFAULT_WEIGHTS
+    n, m = len(a), len(b)
+    if n == 0 and m == 0:
+        return 0.0
+    cols = m + 1
+    dp = [0.0] * ((n + 1) * cols)
+
+    def at(i: int, j: int) -> int:
+        return i * cols + j
+
+    def gap(seg: Seg, is_final: bool) -> float:
+        return _gap_cost(seg, strictness, is_final, word_boundary_leniency, w)
+
+    for i in range(1, n + 1):
+        dp[at(i, 0)] = dp[at(i - 1, 0)] + gap(a[i - 1], is_final=(i == n))
+    for j in range(1, m + 1):
+        dp[at(0, j)] = dp[at(0, j - 1)] + gap(b[j - 1], is_final=(j == m))
+
+    for i in range(1, n + 1):
+        row = i * cols
+        prev = (i - 1) * cols
+        ai = a[i - 1]
+        a_final = i == n
+        for j in range(1, m + 1):
+            diag = dp[prev + j - 1] + _sub_cost(ai, b[j - 1], strictness, w)
+            delete = dp[prev + j] + gap(ai, is_final=a_final)
+            insert = dp[row + j - 1] + gap(b[j - 1], is_final=(j == m))
+            dp[row + j] = diag if diag <= delete and diag <= insert else (
+                delete if delete <= insert else insert
+            )
+
+    return dp[at(n, m)]

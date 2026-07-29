@@ -144,8 +144,8 @@ def find_rhymes(
     cache_db_path: Path | None = None,
     conn: sqlite3.Connection | None = None,
     weights: ScoringWeights | None = None,
-) -> list[RhymeResult]:
-    """Return ranked single-word sound-alikes for ``text``.
+) -> tuple[list[RhymeResult], bool]:
+    """Return ``(ranked single-word sound-alikes, was_cached)``.
 
     Two-stage: generous n-gram retrieval, then anchored rerank. The ``anchor``
     dial (0 = full-span, 1 = tail-anchored) blends whole-word and rhyme-tail
@@ -183,7 +183,7 @@ def find_rhymes(
         )
         cached = cache_service.cache_get(cache_key, db_path=cache_db_path)
         if cached is not None:
-            return [_result_from_dict(d) for d in cached]
+            return [_result_from_dict(d) for d in cached], True
 
     own_conn = conn is None
     if own_conn:
@@ -195,7 +195,7 @@ def find_rhymes(
             target_variants = [enriched_segments(text, conn=conn)]
         target_variants = [tv for tv in target_variants if tv]
         if not target_variants:
-            return []
+            return [], False
 
         # Union the candidate pool across every query variant.
         ids: set[int] = set()
@@ -206,7 +206,7 @@ def find_rhymes(
                 tail_ipa = [s.ipa for s in rhyme_tail(target_segs)]
                 ids.update(tail_candidate_ids(conn, tail_ipa, pool))
         if not ids:
-            return []
+            return [], False
 
         id_list = list(ids)
         placeholders = ",".join("?" * len(id_list))
@@ -309,4 +309,4 @@ def find_rhymes(
         cache_service.cache_put(
             cache_key, [_result_to_dict(r) for r in results], db_path=cache_db_path
         )
-    return results
+    return results, False

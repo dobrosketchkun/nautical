@@ -274,10 +274,16 @@ class Vectors:
         exclude = {w.lower() for w in (exclude or set())}
         allowed = {w.lower() for w in allowed} if allowed is not None else None
         scores = np.asarray(self.matrix) @ np.asarray(vector, dtype=np.float32)
-        order = np.argsort(-scores)
+        # Over-fetch then filter excludes / allowed; argpartition avoids a full sort.
+        fetch = min(len(scores), max(topn * 20, topn + len(exclude) + 64))
+        if fetch >= len(scores):
+            candidates = np.argsort(-scores)
+        else:
+            part = np.argpartition(-scores, fetch - 1)[:fetch]
+            candidates = part[np.argsort(-scores[part])]
         out: list[tuple[str, float]] = []
-        for idx in order:
-            word = self.vocab[idx]
+        for idx in candidates:
+            word = self.vocab[int(idx)]
             if word in exclude:
                 continue
             if allowed is not None and word not in allowed:

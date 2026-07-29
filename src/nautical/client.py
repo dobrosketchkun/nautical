@@ -246,46 +246,10 @@ class Nautical:
         if diversify_after_theme:
             fetch_limit = max(fetch_limit, limit * 10, 100)
 
-        if multiword:
-            cache_key = multiword_search.multiword_cache_key(
-                text,
-                fetch_limit,
-                beam_width,
-                pool,
-                max_words,
-                min_words,
-                strictness,
-                anchor,
-                word_boundary_leniency,
-                exclusions,
-                decode_diversity,
-                decode_prefix_cap,
-                min_quality,
-                weights=self.weights,
-                db_path=self.paths.db_path,
-            )
-        else:
-            cache_key = word_search.rhymes_cache_key(
-                text,
-                fetch_limit,
-                pool,
-                strictness,
-                anchor,
-                include_self,
-                word_boundary_leniency,
-                multi_variant,
-                exclusions,
-                min_quality,
-                weights=self.weights,
-                db_path=self.paths.db_path,
-            )
-        cached = use_cache and (
-            cache_service.cache_get(cache_key, self.paths.cache_db_path) is not None
-        )
         started = time.perf_counter()
 
         if multiword:
-            candidates = multiword_search.find_multiword(
+            candidates, was_cached = multiword_search.find_multiword(
                 text,
                 limit=fetch_limit,
                 beam_width=beam_width,
@@ -305,7 +269,7 @@ class Nautical:
                 weights=self.weights,
             )
         else:
-            candidates = word_search.find_rhymes(
+            candidates, was_cached = word_search.find_rhymes(
                 text,
                 limit=fetch_limit,
                 pool=pool,
@@ -344,7 +308,7 @@ class Nautical:
             candidates=candidates,
             mode="multiword" if multiword else "single",
             context_terms=context_terms,
-            cached=cached,
+            cached=was_cached,
             elapsed_ms=(time.perf_counter() - started) * 1000.0,
         )
 

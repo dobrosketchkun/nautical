@@ -55,14 +55,14 @@ def test_anchored_score_onset_share_low_tail(db_path):
 
 
 def test_find_rhymes_tail_anchor_ranks_end_rhymes(db_path):
-    results = find_rhymes("stainless", limit=8, anchor=1.0, conn=_conn(db_path))
+    results, _ = find_rhymes("stainless", limit=8, anchor=1.0, conn=_conn(db_path))
     words = [r.word for r in results]
     assert "painless" in words, words
     assert "brainless" in words, words
 
 
 def test_find_rhymes_phrase_tail_anchor(db_path):
-    results = find_rhymes("clean and stainless", limit=15, anchor=1.0, conn=_conn(db_path))
+    results, _ = find_rhymes("clean and stainless", limit=15, anchor=1.0, conn=_conn(db_path))
     words = [r.word for r in results]
     assert any(w.endswith("ainless") or w in {"painless", "brainless"} for w in words), (
         words
