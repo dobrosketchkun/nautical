@@ -10,7 +10,8 @@ It is built to rediscover the kind of playful oronyms found in real lyrics:
 
 - `not a cult` ↔ `nautical`
 - `clean and stainless` ↔ `acting brainless`
-- `nautical` → `not a cult`, `gnaw tickle`, `knot tickle`
+- `nautical` → multi-word tilings such as `not a cult` (use `--multiword`;
+  hard loose oronyms may need `--thorough`)
 
 The guiding principle is **retrieval-first, transformation-second, generation-third**:
 find what already sounds like your selection before manufacturing altered forms.

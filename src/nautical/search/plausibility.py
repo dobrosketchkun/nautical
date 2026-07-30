@@ -132,6 +132,41 @@ CLOSED_FUNCTION_WORDS = frozenset(
         "ll",
         "d",
         "m",
+        # Contractions (CMUdict often tags these as JJ/NN)
+        "i'm",
+        "im",
+        "you're",
+        "we're",
+        "they're",
+        "he's",
+        "she's",
+        "it's",
+        "i've",
+        "you've",
+        "we've",
+        "they've",
+        "i'll",
+        "you'll",
+        "we'll",
+        "they'll",
+        "i'd",
+        "you'd",
+        "we'd",
+        "they'd",
+        "that's",
+        "what's",
+        "there's",
+        "here's",
+        "who's",
+        "can't",
+        "won't",
+        "don't",
+        "didn't",
+        "isn't",
+        "aren't",
+        "wasn't",
+        "weren't",
+        "i",
     }
 )
 
@@ -140,8 +175,12 @@ def is_closed_token(word: str, tag: str) -> bool:
     """True if the token is closed-class by tag or high-frequency glue lemma."""
     if tag in CLOSED_CLASS_TAGS:
         return True
-    lowered = word.lower()
-    return lowered in CLOSED_FUNCTION_WORDS or lowered.strip("'") in CLOSED_FUNCTION_WORDS
+    lowered = word.lower().replace("\u2019", "'")
+    if lowered in CLOSED_FUNCTION_WORDS or lowered.strip("'") in CLOSED_FUNCTION_WORDS:
+        return True
+    # "i'm" → "im" after dropping apostrophes
+    compact = lowered.replace("'", "")
+    return compact in CLOSED_FUNCTION_WORDS
 
 
 def clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -163,13 +202,141 @@ def geometric_freq(frequencies: Sequence[float]) -> float:
     return math.exp(sum(logs) / len(logs))
 
 
+# Sole open-class content word: floor freq_score so rare nouns in otherwise
+# grammatical frames ("cult" in "not a cult") are not crushed vs common rivals.
+_CONTENT_FREQ_SCORE_FLOOR = 0.55
+_CONTENT_FREQ_POS_GATE = 0.80
+
+
+def geometric_freq_content_aware(
+    frequencies: Sequence[float],
+    words: Sequence[str] | None,
+    tags: Sequence[str],
+    pos_plaus: float,
+) -> float:
+    """Like ``geometric_freq``, with a floor on a lone content word's score."""
+    if not frequencies:
+        return 0.0
+    scores = [freq_score(f) for f in frequencies]
+    if (
+        words is not None
+        and len(words) == len(tags) == len(scores)
+        and pos_plaus >= _CONTENT_FREQ_POS_GATE
+    ):
+        content_idxs = [
+            i
+            for i, (word, tag) in enumerate(zip(words, tags))
+            if not is_closed_token(word, tag)
+        ]
+        if len(content_idxs) == 1:
+            i = content_idxs[0]
+            scores[i] = max(scores[i], _CONTENT_FREQ_SCORE_FLOOR)
+    logs = [math.log(max(s, _FREQ_EPS)) for s in scores]
+    return math.exp(sum(logs) / len(logs))
+
+
+def grammar_penalty(
+    tags: Sequence[str], words: Sequence[str] | None = None
+) -> float:
+    """Small [0, 1] penalty for clearly broken local tag frames."""
+    if not tags:
+        return 0.0
+    penalty = 0.0
+    # Determiner + past participle/past ("a called") is not a noun phrase.
+    for i in range(len(tags) - 1):
+        if tags[i] == "DT" and tags[i + 1] in {"VBN", "VBD"}:
+            penalty += 0.05
+    # Phrase-final determiner ("no talk a") is almost never grammatical.
+    if tags[-1] == "DT":
+        penalty += 0.04
+    # Short tilings with infinitival/prep "to" ("know to call", "no to can")
+    # are the dominant junk pattern even when one content word is present.
+    if words is not None and 2 <= len(words) <= 3:
+        if any(w.lower() == "to" for w in words) or "TO" in tags:
+            penalty += 0.12
+    elif "TO" in tags and len(tags) <= 3:
+        penalty += 0.12
+    return min(penalty, 0.20)
+
+
+# Prep / particle / pronoun stacks that mark junk glue ("no to X"). Light
+# closed tags (DT, RB, …) are expected in content NPs ("not a cult") and do
+# not alone trigger saturation when open-class content is present.
+_GLUE_TRIGGER_TAGS = frozenset(
+    {
+        "TO",
+        "IN",
+        "CC",
+        "MD",
+        "PRP",
+        "PRP$",
+        "WP",
+        "WP$",
+        "WDT",
+        "EX",
+        "RP",
+        "POS",
+    }
+)
+_GLUE_TRIGGER_WORDS = frozenset(
+    {
+        "to",
+        "of",
+        "in",
+        "on",
+        "for",
+        "and",
+        "or",
+        "but",
+        "with",
+        "from",
+        "i'm",
+        "im",
+        "it's",
+        "its",
+        "i",
+        "you",
+        "he",
+        "she",
+        "we",
+        "they",
+        "me",
+        "him",
+        "her",
+        "us",
+        "them",
+        "can",
+        "could",
+        "would",
+        "should",
+        "will",
+        "may",
+        "might",
+        "must",
+        "are",
+        "is",
+        "was",
+        "were",
+        "be",
+        "do",
+        "did",
+    }
+)
+
+
 def function_ok(
     tags: Sequence[str],
     words: Sequence[str] | None = None,
     *,
     closed_frac_threshold: float | None = None,
 ) -> float:
-    """1.0 unless closed-class fraction ≥ threshold, then ``1 - closed_frac``."""
+    """1.0 unless saturated closed-class glue, then ``1 - closed_frac``.
+
+    Saturation requires closed-class fraction ≥ threshold. When the phrase
+    still has open-class content, light frames (DT/RB + noun) are exempt —
+    only structural glue (TO/IN/PRP/MD/…) triggers the penalty. Pure
+    closed-class stacks always saturate.
+    """
     if not tags:
         return 1.0
     threshold = (
@@ -179,12 +346,23 @@ def function_ok(
     )
     if words is None or len(words) != len(tags):
         closed = sum(1 for t in tags if t in CLOSED_CLASS_TAGS)
+        has_content = any(t not in CLOSED_CLASS_TAGS for t in tags)
+        has_glue_trigger = any(t in _GLUE_TRIGGER_TAGS for t in tags)
     else:
         closed = sum(1 for w, t in zip(words, tags) if is_closed_token(w, t))
+        has_content = any(
+            not is_closed_token(w, t) for w, t in zip(words, tags)
+        )
+        has_glue_trigger = any(
+            t in _GLUE_TRIGGER_TAGS or w.lower() in _GLUE_TRIGGER_WORDS
+            for w, t in zip(words, tags)
+        )
     closed_frac = closed / len(tags)
-    if closed_frac >= threshold:
-        return 1.0 - closed_frac
-    return 1.0
+    if closed_frac < threshold:
+        return 1.0
+    if has_content and not has_glue_trigger:
+        return 1.0
+    return 1.0 - closed_frac
 
 
 def normalize_tag(tag: str | None) -> str:
@@ -236,6 +414,20 @@ class PosTagLM:
             return 1.0
         return clamp((mean_log - _LOG_FLOOR) / (0.0 - _LOG_FLOOR))
 
+    def pos_plausibility_noun_backoff(self, tags: Sequence[str]) -> float:
+        """Best plausibility allowing each VB* tag to try ``NN`` instead.
+
+        CMUdict content words are often mistagged as verbs (e.g. ``cult`` as
+        VBP); noun backoff recovers grammatical DT/RB + NN frames.
+        """
+        best = self.pos_plausibility(tags)
+        for i, tag in enumerate(tags):
+            if tag.startswith("VB"):
+                alt = list(tags)
+                alt[i] = "NN"
+                best = max(best, self.pos_plausibility(alt))
+        return best
+
 
 def phrase_naturalness(
     frequencies: Sequence[float],
@@ -246,23 +438,40 @@ def phrase_naturalness(
 ) -> tuple[float, float, float, float]:
     """Return ``(naturalness, freq_geom, pos_plaus, function_ok)``.
 
-    When a tiling is function-word saturated (≥2/3 closed-class tokens),
-    ``naturalness`` is capped by ``function_ok`` so pure glue phrases cannot
-    keep a high Nat score from frequency alone.
+    When a tiling is all closed-class glue, ``naturalness`` is capped by
+    ``function_ok`` so pure function stacks cannot keep a high Nat score from
+    frequency alone. Content-bearing phrases keep the uncapped blend.
     """
     w = weights if weights is not None else DEFAULT_WEIGHTS
-    freq_geom = geometric_freq(frequencies)
     func = function_ok(tags, words, closed_frac_threshold=w.closed_frac_threshold)
     if lm is None:
         pos_plaus = 0.5
     else:
-        pos_plaus = lm.pos_plausibility(tags)
+        pos_plaus = lm.pos_plausibility_noun_backoff(tags)
+    freq_geom = geometric_freq_content_aware(
+        frequencies, words, tags, pos_plaus
+    )
     naturalness = (
         w.freq_geom_weight * freq_geom
         + w.pos_plaus_weight * pos_plaus
         + w.function_ok_weight * func
     )
-    if func < 1.0:
+    naturalness = max(0.0, naturalness - grammar_penalty(tags, words))
+    # Hard-cap pure-glue stacks, and also prep/particle sandwiches even when
+    # one open-class word is present ("know to can"). Light DT/RB frames with
+    # content ("not a cult") keep the uncapped blend.
+    if words is not None and len(words) == len(tags):
+        has_content = any(
+            not is_closed_token(word, tag) for word, tag in zip(words, tags)
+        )
+        has_prep_glue = any(
+            tag in {"TO", "IN"} or word.lower() in {"to", "of"}
+            for word, tag in zip(words, tags)
+        )
+    else:
+        has_content = any(t not in CLOSED_CLASS_TAGS for t in tags)
+        has_prep_glue = any(t in {"TO", "IN"} for t in tags)
+    if func < 1.0 and (not has_content or has_prep_glue):
         naturalness = min(naturalness, func)
     return naturalness, freq_geom, pos_plaus, func
 

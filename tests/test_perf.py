@@ -117,7 +117,7 @@ def test_cold_latency_budgets(db_path):
         find_multiword(
             "nautical",
             limit=25,
-            beam_width=60,
+            beam_width=300,
             cand_per_pos=1500,
             diversity=0.0,
             prefix_cap=0,
@@ -128,4 +128,6 @@ def test_cold_latency_budgets(db_path):
         conn.close()
 
     assert single_s < 1.0, f"single-word cold {single_s:.2f}s"
-    assert multi_s < 2.0, f"multiword cold {multi_s:.2f}s"
+    # U6: stretch K=2 + A* transition precompute + larger rescore pool.
+    # Still bounded; thorough mode is uncapped separately.
+    assert multi_s < 4.0, f"multiword cold {multi_s:.2f}s"

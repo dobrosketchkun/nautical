@@ -512,12 +512,19 @@ def rhymes(
     multiword: bool = typer.Option(
         False, "--multiword", help="Decode multi-word sound-alikes (e.g. 'not a cult')."
     ),
-    beam: int = typer.Option(60, "--beam", help="Beam width for the multi-word decoder."),
+    beam: int = typer.Option(
+        300, "--beam", help="Beam width for the multi-word decoder."
+    ),
     max_words: int = typer.Option(
         5, "--max-words", help="Max words per multi-word result."
     ),
     min_words: int = typer.Option(
         2, "--min-words", help="Min words per multi-word result."
+    ),
+    thorough: bool = typer.Option(
+        False,
+        "--thorough",
+        help="Widen beam/candidates/stretch for hard loose oronyms (slower).",
     ),
     show_align: bool = typer.Option(
         False, "--align", help="Print the phoneme alignment for each result."
@@ -541,7 +548,7 @@ def rhymes(
         False, "--no-cache", help="Bypass the query-result cache for this search."
     ),
     diversity: float = typer.Option(
-        0.35,
+        0.30,
         "--diversity",
         min=0.0,
         max=1.0,
@@ -587,6 +594,7 @@ def rhymes(
             diversity=diversity,
             prefix_cap=prefix_cap,
             min_quality=min_quality,
+            thorough=thorough,
             use_cache=not no_cache,
             as_json=as_json,
         )
@@ -726,9 +734,10 @@ def _rhymes_multiword(
     show_align: bool,
     word_boundary_leniency: bool = True,
     exclude: str | None = None,
-    diversity: float = 0.35,
+    diversity: float = 0.30,
     prefix_cap: int = 3,
     min_quality: float = DEFAULT_MIN_QUALITY,
+    thorough: bool = False,
     use_cache: bool = True,
     as_json: bool = False,
 ) -> None:
@@ -753,6 +762,7 @@ def _rhymes_multiword(
             diversity=diversity,
             prefix_cap=prefix_cap,
             min_quality=min_quality,
+            thorough=thorough,
             use_cache=use_cache,
         )
     except NauticalError as exc:

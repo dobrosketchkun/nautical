@@ -31,9 +31,12 @@ def test_function_ok_saturation():
     assert function_ok(["DT", "TO", "MD"], ["no", "to", "can"]) == pytest.approx(0.0)
     assert function_ok(["DT", "NN", "NN"], ["the", "cat", "hat"]) == 1.0  # 1/3
     assert function_ok(["NN", "NN", "NN"], ["no", "to", "'cause"]) == pytest.approx(0.0)
-    # 2/3 closed saturates (needed so "no to X" 3-word tilings are demoted)
+    # 2/3 closed + structural glue saturates ("no to X")
     assert function_ok(["DT", "IN", "NN"], ["the", "in", "house"]) == pytest.approx(1.0 - 2.0 / 3.0)
     assert function_ok(["DT", "TO", "NN"], ["no", "to", "call"]) == pytest.approx(1.0 - 2.0 / 3.0)
+    # Light closed frame + content noun does not saturate ("not a cult")
+    assert function_ok(["RB", "DT", "NN"], ["not", "a", "cult"]) == 1.0
+    assert function_ok(["RB", "DT", "NN"], ["not", "a", "call"]) == 1.0
 
 
 def test_pos_lm_prefers_grammatical_tag_sequence():

@@ -155,6 +155,10 @@ def _rank_of(results: list, expected: str, attr: str) -> tuple[int | None, objec
     for i, r in enumerate(results, start=1):
         if _normalize(getattr(r, attr)) == target:
             return i, r
+        # U1.1 IPA collapse may park the expected spelling under variants.
+        for alt in getattr(r, "variants", None) or []:
+            if _normalize(alt) == target:
+                return i, r
     return None, None
 
 
@@ -190,8 +194,10 @@ def evaluate_pair(
             query,
             limit=fetch_limit,
             anchor=anchor,
-            diversity=0.0,
-            prefix_cap=0,
+            # Product defaults: prefix diversity is required so "no …" junk does
+            # not monopolize the board and bury grammatical oronyms.
+            diversity=0.30,
+            prefix_cap=3,
             cand_per_pos=pool,
             use_cache=use_cache,
             db_path=db_path,
@@ -276,7 +282,7 @@ def measure_diversity(
     results, _ = multiword_search.find_multiword(
         query,
         limit=top_k,
-        diversity=0.35,
+        diversity=0.30,
         prefix_cap=3,
         use_cache=use_cache,
         db_path=db_path,
